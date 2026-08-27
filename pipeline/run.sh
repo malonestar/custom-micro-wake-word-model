@@ -68,6 +68,13 @@ case "$MODE" in
   service)
     # A systemd service is the strongest option: it starts on boot, so a
     # preempted or rebooted VM resumes on its own without anyone logging in.
+    # It needs an init system, which container runtimes (Colab, Docker) do not
+    # have — there, --detach plus an external keep-alive is the equivalent.
+    if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+      echo "No systemd on this machine (a container runtime, most likely)."
+      echo "Use --detach instead; on Colab, colab/colab_run.sh does this for you."
+      exit 1
+    fi
     UNIT=/etc/systemd/system/wakeword.service
     echo "Installing $UNIT (requires sudo)..."
     sudo tee "$UNIT" > /dev/null <<UNITEOF

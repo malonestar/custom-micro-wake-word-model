@@ -18,6 +18,8 @@ from pathlib import Path
 
 import yaml
 
+from ..archive import CheckpointMirror
+
 # Architecture from the microWakeWord reference recipe. These are model shape
 # arguments, not tuning knobs — leave them alone unless you know the model.
 MODEL_ARCHITECTURE = [
@@ -178,15 +180,28 @@ def run(cfg, log=print) -> None:
     ]
     log("  " + " ".join(cmd))
 
-    # Stream output so `tail -f` on the run log shows live progress rather than
-    # nothing until the process exits hours later.
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
-    )
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        log(line.rstrip())
-    code = proc.wait()
+    # Training is one long step, so the post-step archive never fires for a run
+    # that dies partway. Mirror checkpoints as we go instead.
+    archive_dir = getattr(cfg, "archive_dir", None)
+    mirror = CheckpointMirror(cfg, archive_dir, log=log) if archive_dir else None
+
+    def _train() -> int:
+        # Stream output so `tail -f` on the run log shows live progress rather
+        # than nothing until the process exits hours later.
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            log(line.rstrip())
+        return proc.wait()
+
+    if mirror:
+        with mirror:
+            code = _train()
+    else:
+        code = _train()
+
     if code != 0:
         raise RuntimeError(f"training exited with status {code}")

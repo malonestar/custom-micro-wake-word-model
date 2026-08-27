@@ -78,6 +78,9 @@ class Config:
         env_work = os.environ.get("WAKEWORD_WORK_DIR")
         self.work = Path(work_dir or env_work or (Path.cwd() / "work")).resolve()
 
+        # Set by the orchestrator when mirroring to durable storage is enabled.
+        self.archive_dir: Path | None = None
+
     # ---- derived paths ----------------------------------------------------
     @property
     def wake_word_phrase(self) -> Phrase:

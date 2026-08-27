@@ -65,15 +65,22 @@ so `bootstrap.sh` works unchanged. This is the lowest-friction option and I'd
 take it over fighting GCP quota — the only reason it isn't first is that you
 already have the credits.
 
-### 3. Colab — workable now, but still the worst fit
+### 3. Colab, driven by the Colab CLI — free, and better than it sounds
 
-The pipeline runs on Colab and resumes properly if you point `WAKEWORD_WORK_DIR`
-at your mounted Drive. But Drive is slow for the hundreds of thousands of small
-files this produces, and you are still subject to the disconnects. Use it to run
-`--preview` and check pronunciation; use something else for the real run.
+Colab's CLI provisions a runtime from your terminal and runs a **keep-alive
+daemon** that holds it with no browser tab open — the same mechanism Google's
+own VS Code extension uses, so this is a supported path rather than a trick.
+Combined with `--archive-dir` (below), a reclaimed runtime costs you one step
+rather than the run.
 
-**What I'd do:** try the GCP quota request now since the credits are already
-yours. If it isn't approved within a day, spend $5 on RunPod and be done.
+A free-tier account does get a T4 this way. What you don't get is an unlimited
+session: the runtime is still reclaimed on Colab's schedule, so a full run
+usually spans two sessions. `colab/colab_run.sh` drives the whole thing —
+see **Running it on Colab** below.
+
+**What I'd do:** start on Colab, since it costs nothing and needs no approval.
+Request GCP quota in parallel; if it lands, move over for a single
+uninterrupted run.
 
 [gcp-free]: https://docs.cloud.google.com/free/docs/free-cloud-features
 
@@ -100,8 +107,9 @@ The Deep Learning VM image ships with CUDA and the NVIDIA driver, which saves a
 fussy install. If that image family name has moved, list what's current with
 `gcloud compute images list --project deeplearning-platform-release | grep cu12`.
 
-200 GB is deliberate: the generated clips, augmentation audio and spectrogram
-features together run well over 100 GB.
+200 GB is deliberate. The generated clips, augmentation audio and spectrogram
+features together run roughly 30-50 GB; the rest is headroom, and disk is the
+cheapest part of this whole exercise.
 
 Then:
 
@@ -177,6 +185,100 @@ To force one step to re-run:
 ./run.sh config/fbi_guy.yaml --only 04_train     # just this one
 ./run.sh config/fbi_guy.yaml --from-step 04_train
 ```
+
+---
+
+## Running it on Colab
+
+Colab needs no account upgrade, no quota request, and no money. The tradeoff is
+that the runtime gets reclaimed on Colab's schedule, so the run normally spans
+two sessions. The archive is what makes that cheap instead of painful.
+
+### Once
+
+```bash
+uv tool install google-colab-cli     # or: pipx install google-colab-cli
+```
+
+If `colab` is then "not found", it is a PATH problem, not a failed install —
+`uv` puts tools in `~/.local/bin`.
+
+Authentication is a copy-paste flow by default: it prints a URL, you approve it
+in a browser on any machine, and paste the code back. Nothing needs a display on
+the machine running it, so a headless box is fine.
+
+### Every session
+
+```bash
+./colab/colab_run.sh setup      # provision a T4, mount Drive, install everything
+./colab/colab_run.sh preview    # generate clips and download them — listen first
+./colab/colab_run.sh start      # launch detached, then close the terminal
+```
+
+Then check in whenever:
+
+```bash
+./colab/colab_run.sh status
+./colab/colab_run.sh log
+```
+
+When it finishes:
+
+```bash
+./colab/colab_run.sh fetch      # downloads the .tflite and .json
+./colab/colab_run.sh stop       # release the runtime
+```
+
+### When Colab takes the runtime away
+
+```bash
+./colab/colab_run.sh setup && ./colab/colab_run.sh start
+```
+
+That is the whole recovery. Setup restores the completed steps from the Drive
+archive instead of regenerating them, and training resumes from its last
+mirrored checkpoint.
+
+### Watch the disk
+
+`setup` prints free space under `/content` and warns if it looks tight. The run
+needs roughly 30-50 GB. If your runtime has less, lower `positives.max_samples`
+to `25000` and `datasets.audioset_clips` to `8000` in the config — the model
+will be somewhat worse on false accepts, but it will finish.
+
+---
+
+## Surviving an ephemeral machine
+
+`--archive-dir` mirrors each finished step to durable storage — a mounted Drive,
+a network share, a second disk — so a machine that disappears does not take the
+run with it.
+
+```bash
+./run.sh config/fbi_guy.yaml --detach --archive-dir /content/drive/MyDrive/wakeword-archive
+```
+
+or set `WAKEWORD_ARCHIVE_DIR`. `colab_run.sh` does this for you.
+
+What it does:
+
+- **After each expensive step**, tars that step's output into the archive.
+- **On startup**, restores anything missing locally, then marks those steps done.
+- **During training**, mirrors checkpoints every five minutes — training is one
+  long step, so waiting until it finishes would mean losing hours to a runtime
+  that vanishes at hour four.
+
+Two deliberate choices worth knowing:
+
+- **Step 2 is not archived.** Those datasets are plain downloads; fetching them
+  from the original hosts again costs about what a Drive round-trip costs.
+- **A step's `.done` marker is only restored if its data was.** Restoring a
+  marker whose artifacts failed to come back would make the pipeline skip a step
+  whose output does not exist, and the failure would surface somewhere far less
+  obvious. Local data always wins over the archive; nothing is overwritten.
+
+On a persistent machine you do not need any of this — the work directory is
+already durable. Leave the flag off.
 
 ---
 
@@ -304,16 +406,20 @@ pipeline/
   bootstrap.sh             one-time machine setup
   run.sh                   start the pipeline (--preview / --detach / --service)
   status.sh                progress summary
+  colab/colab_run.sh       drive the whole thing on a Colab runtime
   wakeword/
     config.py              config parsing and the work-directory layout
     state.py               step markers and status.json — the resume machinery
+    archive.py             mirroring to durable storage for ephemeral machines
     piper.py               resumable TTS generation
     steps/                 the five pipeline steps
   tests/                   tests for the parts that don't need a GPU
 ```
 
 Run the tests with `python -m pytest tests/ -q` (needs only `pyyaml` and
-`pytest`; they do not touch the GPU or the network).
+`pytest`; they do not touch the GPU or the network), plus
+`./tests/test_colab_driver.sh` for the Colab driver's remote-execution shim,
+which runs against a stub CLI.
 
 ---
 

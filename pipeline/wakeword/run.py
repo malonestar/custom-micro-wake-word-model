@@ -15,6 +15,7 @@ import traceback
 from datetime import timedelta
 from pathlib import Path
 
+from . import archive as archive_mod
 from . import config as config_mod
 from .state import State
 from .steps import s01_samples, s02_datasets, s03_features, s04_train, s05_export
@@ -58,10 +59,14 @@ def main(argv=None) -> int:
                         help="clear a step's completion marker so it runs again")
     parser.add_argument("--preview", action="store_true",
                         help="generate a few sample clips to check pronunciation, then exit")
+    parser.add_argument("--archive-dir", default=None,
+                        help="durable directory (e.g. a mounted Drive) to mirror "
+                             "completed steps to, so an ephemeral runtime can resume")
     args = parser.parse_args(argv)
 
     cfg = config_mod.load(args.config, args.work_dir)
     cfg.ensure_dirs()
+    cfg.archive_dir = archive_mod.resolve_archive_dir(args.archive_dir)
     log = Logger(cfg.work / "run.log")
     state = State(cfg.state_dir)
 
@@ -69,11 +74,17 @@ def main(argv=None) -> int:
     log(f"wake word : {cfg.label!r}  ({cfg.model_name})")
     log(f"config    : {cfg.path}")
     log(f"work dir  : {cfg.work}")
+    if cfg.archive_dir:
+        log(f"archive   : {cfg.archive_dir}")
     log("=" * 72)
 
     if args.preview:
         s01_samples.preview(cfg, log=log)
         return 0
+
+    if cfg.archive_dir:
+        log("\n=== Restoring from archive ===")
+        archive_mod.restore_all(cfg, cfg.archive_dir, log=log)
 
     for step in args.redo:
         state.clear(step)
@@ -116,6 +127,16 @@ def main(argv=None) -> int:
             log("same command — completed steps are skipped automatically.")
             return 1
         log(f"[done] {name} in {timedelta(seconds=int(time.time() - started))}")
+
+        if cfg.archive_dir:
+            try:
+                archive_mod.archive_step(cfg, name, cfg.archive_dir, log=log)
+            except Exception as exc:
+                # The step itself succeeded; a failed mirror should not discard
+                # that. Warn loudly — resuming will cost this step again.
+                log(f"[warn] archiving {name} failed: {exc}")
+                log("       the step is complete locally but will not survive "
+                    "losing this machine.")
 
     state.update(finished_at=time.time(), current_step=None)
     log(f"\n{'=' * 72}")
