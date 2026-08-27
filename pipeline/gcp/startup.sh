@@ -36,12 +36,20 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "still no
 apt-get update -qq && apt-get install -y -qq git python3 python3-venv python3-dev \
   build-essential espeak-ng ffmpeg libsndfile1 curl >/dev/null 2>&1
 
-if [ ! -d "$INSTALL/custom-micro-wake-word-model/.git" ]; then
-  git clone --branch "$BRANCH" "$REPO_URL" "$INSTALL/custom-micro-wake-word-model"
+SRC="$INSTALL/custom-micro-wake-word-model"
+# Prefer a code bundle in the bucket over cloning: it carries the exact working
+# tree that was tested locally, including commits that have not been pushed, and
+# needs no git credentials on the VM.
+if [ -n "$BUCKET" ] && gcloud storage cp "$BUCKET/code/pipeline-src.tar.gz" /tmp/src.tar.gz 2>/dev/null; then
+  echo "installing code from $BUCKET/code/pipeline-src.tar.gz"
+  rm -rf "$SRC"; mkdir -p "$SRC"
+  tar -xzf /tmp/src.tar.gz -C "$SRC"
+elif [ ! -d "$SRC/.git" ]; then
+  git clone --branch "$BRANCH" "$REPO_URL" "$SRC"
 else
-  git -C "$INSTALL/custom-micro-wake-word-model" fetch --all -q || true
-  git -C "$INSTALL/custom-micro-wake-word-model" checkout -q "$BRANCH" || true
-  git -C "$INSTALL/custom-micro-wake-word-model" pull -q || true
+  git -C "$SRC" fetch --all -q || true
+  git -C "$SRC" checkout -q "$BRANCH" || true
+  git -C "$SRC" pull -q || true
 fi
 
 # --- resume: pull any checkpoints a previous VM published --------------------

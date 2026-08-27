@@ -22,6 +22,12 @@ GCLOUD="${GCLOUD_BIN:-$HOME/google-cloud-sdk/bin/gcloud}"
 
 VM="${WAKEWORD_VM:-wakeword-trainer}"
 ZONE="${WAKEWORD_ZONE:-us-central1-a}"
+# GPU capacity is per-zone and varies through the day. Rather than fail on the
+# first "does not have enough resources", walk a candidate list; the zone that
+# succeeds is recorded so every later command targets the right one.
+ZONE_CANDIDATES="${WAKEWORD_ZONES:-us-central1-a us-central1-b us-central1-c us-central1-f us-west1-b us-west4-a us-east1-c us-east1-d us-east4-b us-south1-a}"
+ZONE_FILE="${WAKEWORD_ZONE_FILE:-$PIPELINE/.gcp_zone}"
+[ -f "$ZONE_FILE" ] && ZONE="$(cat "$ZONE_FILE")"
 MACHINE="${WAKEWORD_MACHINE:-n1-standard-16}"
 GPU="${WAKEWORD_GPU:-nvidia-tesla-t4}"
 DISK="${WAKEWORD_DISK:-200GB}"
@@ -47,15 +53,35 @@ cmd_create() {
   local project; project="$(g config get-value project 2>/dev/null)"
   [ -n "$project" ] && [ "$project" != "(unset)" ] || die "no project set: gcloud config set project PROJECT_ID"
 
-  say "Creating $VM ($MACHINE + ${GPU}) in $ZONE, project $project"
   warn "It shuts itself down when the run ends — success or terminal failure."
 
+  local created=""
+  for z in $ZONE_CANDIDATES; do
+    say "Trying $MACHINE + $GPU in $z (project $project)"
+    if _create_in_zone "$z"; then
+      created="$z"; ZONE="$z"; echo "$z" > "$ZONE_FILE"
+      say "Created in $z"
+      break
+    fi
+    warn "$z unavailable; trying the next zone"
+  done
+  [ -n "$created" ] || die "no zone had capacity for $MACHINE + $GPU.
+  Try again shortly, or set WAKEWORD_MACHINE=n1-standard-8 (smaller shapes
+  place more easily) and re-run."
+
+  say "Boot + driver install + bootstrap takes ~10-15 min."
+  echo "  watch:  $0 watch"
+  echo "  log:    $0 log"
+}
+
+_create_in_zone() {
+  local z="$1"
   g compute instances create "$VM" \
-    --zone="$ZONE" \
+    --zone="$z" \
     --machine-type="$MACHINE" \
     --accelerator="type=$GPU,count=1" \
     --maintenance-policy=TERMINATE \
-    --image-family=common-cu121-ubuntu-2204-py310 \
+    --image-family="${WAKEWORD_IMAGE_FAMILY:-common-cu129-ubuntu-2204-nvidia-580}" \
     --image-project=deeplearning-platform-release \
     --boot-disk-size="$DISK" \
     --boot-disk-type=pd-balanced \
@@ -64,11 +90,11 @@ cmd_create() {
 wakeword-repo-url=$REPO_URL,wakeword-branch=$BRANCH,wakeword-config=$CONFIG,\
 wakeword-bucket=$BUCKET,wakeword-user=root" \
     --metadata-from-file=startup-script="$HERE/startup.sh" \
-    || die "instance creation failed"
-
-  say "Created. Boot + driver install + bootstrap takes ~10-15 min."
-  echo "  watch:  $0 watch"
-  echo "  log:    $0 log"
+    >/dev/null 2>"$PIPELINE/.gcp_create_err"
+  local rc=$?
+  [ "$rc" -eq 0 ] || grep -qE "resource_availability|does not have enough resources" \
+    "$PIPELINE/.gcp_create_err" || { tail -6 "$PIPELINE/.gcp_create_err" >&2; }
+  return "$rc"
 }
 
 remote_state() { ssh_vm "sudo cat /mnt/work/vm_state 2>/dev/null" ; }
