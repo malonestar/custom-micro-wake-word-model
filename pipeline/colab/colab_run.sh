@@ -103,6 +103,30 @@ session_exists() {
   colab sessions 2>/dev/null | grep -q "\[$SESSION\]"
 }
 
+# The tunnel to a Colab runtime drops transient SSL/connection errors under
+# load ("EOF occurred in violation of protocol"). A single failed transfer
+# should not end a run that is otherwise healthy, so retry with backoff.
+retry_transfer() {
+  local what="$1"; shift
+  local attempts="${WAKEWORD_TRANSFER_RETRIES:-4}" n=1 delay=5 out rc
+  while true; do
+    # Capture rather than pipe: a pipeline's status is the last stage's, so
+    # piping the command into grep discards the very exit code we need. The
+    # CLI also reports some failures on stdout with status 0, so check both.
+    out="$("$@" 2>&1)"; rc=$?
+    if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -qiE "failed|error|traceback"; then
+      return 0
+    fi
+    printf '%s\n' "$out" | tail -3
+    if [ "$n" -ge "$attempts" ]; then
+      warn "$what failed after $n attempts"
+      return 1
+    fi
+    warn "$what failed (attempt $n/$attempts) — retrying in ${delay}s"
+    sleep "$delay"; n=$((n + 1)); delay=$((delay * 2))
+  done
+}
+
 # Newline-separated list of files under a remote directory (recursive).
 remote_find() {
   remote_sh 120 "find '$1' -type f 2>/dev/null" || true
@@ -134,7 +158,7 @@ sync_archive_down() {
     fi
     mkdir -p "$(dirname "$lf")"
     echo "  down: $rel ($(numfmt --to=iec "$rsize" 2>/dev/null || echo "$rsize B"))"
-    colab download -s "$SESSION" "$rf" "$lf"
+    retry_transfer "download $rel" colab download -s "$SESSION" "$rf" "$lf" || true
   done <<< "$files"
 }
 
@@ -149,7 +173,7 @@ sync_archive_up() {
     local rel="${lf#$LOCAL_ARCHIVE/}"
     echo "  up: $rel"
     remote_sh 60 "mkdir -p '$(dirname "$REMOTE_ARCHIVE/$rel")'"
-    colab upload -s "$SESSION" "$lf" "$REMOTE_ARCHIVE/$rel"
+    retry_transfer "upload $rel" colab upload -s "$SESSION" "$lf" "$REMOTE_ARCHIVE/$rel" || true
   done <<< "$(find "$LOCAL_ARCHIVE" -type f 2>/dev/null)"
   [ "$any" = 1 ] && echo "  local archive restored to the runtime" || true
 }
@@ -185,11 +209,33 @@ cmd_setup() {
   bundle="$(mktemp -d)/wakeword-pipeline.tar.gz"
   # Only what the runtime needs: the pipeline itself plus the patched upstream
   # files bootstrap.sh copies over microWakeWord.
+  #
+  # The exclusions are load-bearing, not tidiness. archive/ holds the banked
+  # step tarballs (hundreds of MB) and is pushed separately and selectively by
+  # sync_archive_up; sweeping it into this bundle made the upload fail
+  # repeatedly with an SSL EOF that looked like a network fault.
   tar -czf "$bundle" -C "$REPO" \
     --exclude='__pycache__' --exclude='.pytest_cache' --exclude='env.sh' \
+    --exclude='pipeline/archive' --exclude='pipeline/output' \
+    --exclude='pipeline/preview' --exclude='pipeline/work' \
+    --exclude='*.tar' --exclude='*.wav' \
     pipeline microWakeWord
-  colab upload -s "$SESSION" "$bundle" /content/wakeword-pipeline.tar.gz
+  local bundle_mb=$(( $(stat -c%s "$bundle") / 1024 / 1024 ))
+  echo "  bundle: ${bundle_mb} MB"
+  if [ "$bundle_mb" -gt 50 ]; then
+    warn "bundle is ${bundle_mb} MB — larger than expected; the tunnel drops big uploads."
+  fi
+  retry_transfer "pipeline upload" \
+    colab upload -s "$SESSION" "$bundle" /content/wakeword-pipeline.tar.gz \
+    || die "could not upload the pipeline after repeated attempts"
+  local local_size
+  local_size="$(stat -c%s "$bundle")"
   rm -rf "$(dirname "$bundle")"
+  # Trust but verify: an upload that reports success but lands nothing leaves a
+  # confusing tar error several commands later.
+  remote_sh 60 "test -s /content/wakeword-pipeline.tar.gz && \
+    [ \"\$(stat -c%s /content/wakeword-pipeline.tar.gz)\" = \"$local_size\" ]" \
+    || die "the uploaded bundle is missing or truncated on the runtime"
 
   remote_sh 120 "rm -rf $REMOTE_ROOT && mkdir -p $REMOTE_ROOT && \
     tar -xzf /content/wakeword-pipeline.tar.gz -C $REMOTE_ROOT && \
