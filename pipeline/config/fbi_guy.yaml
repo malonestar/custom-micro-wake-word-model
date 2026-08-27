@@ -1,0 +1,196 @@
+# ============================================================================
+#  Wake word pipeline configuration — "FBI guy"
+# ============================================================================
+#  This is the ONLY file you need to edit. Everything downstream reads from it.
+#  To train a different wake word, copy this file and change the `wake_word`
+#  and `confusables` blocks.
+# ============================================================================
+
+wake_word:
+  # Human-readable label shown in Home Assistant / ESPHome.
+  label: "FBI guy"
+
+  # Used for filenames and directory names. Lowercase, underscores only.
+  slug: "fbi_guy"
+
+  # Bumped for each retrain so you can A/B two models on the device.
+  version: 1
+
+  # ---- Pronunciation -------------------------------------------------------
+  # Piper is fed IPA phonemes rather than plain text. Spelling out "FBI" as
+  # text makes Piper guess: some voices say "fibby", some spell it, some skip
+  # letters. Phonemes force all ~900 LibriTTS speakers to say the same thing.
+  #
+  #   ˈɛf   = "eff"    ˈbiː = "bee"    ˈaɪ = "eye"    ˈɡaɪ = "guy"
+  #
+  # Each letter carries primary stress because the acronym is enunciated, not
+  # slurred — that matches a neutral Northwestern American delivery.
+  phonemes: "ˈɛf ˈbiː ˈaɪ ˈɡaɪ"
+
+  # Fallback if you ever want plain-text generation instead (set use_phonemes
+  # to false). Kept for reference and for the manifest.
+  text: "FBI guy"
+  use_phonemes: true
+
+# ---- Positive sample generation --------------------------------------------
+positives:
+  # Number of TTS clips of the wake word. 50k is the quality sweet spot.
+  # Drop to 25_000 if you are tight on disk.
+  max_samples: 50000
+
+  # Clips per GPU batch during generation. Lower to 128 on a <12 GB GPU.
+  batch_size: 256
+
+  # Piper sampling noise. Higher = more variation in timing and delivery.
+  noise_scale: 0.5
+  noise_scale_w: 0.6
+
+# ---- Confusable negatives ---------------------------------------------------
+#  Phrases that sound *close* to the wake word but must never trigger it.
+#  These are trained as high-penalty hard negatives and are the single biggest
+#  lever on false-accept behavior.
+#
+#  "FBI guy" has a distinctive vowel skeleton:  /ɛ/ - /iː/ - /aɪ/ - /ɡaɪ/
+#                                                eff   bee    eye    guy
+#
+#  The model does not really learn "F, then B, then I". It learns that vowel
+#  contour. So the dangerous neighbors are any three letters with the same
+#  contour, followed by "guy" — the consonants carry far less weight than the
+#  vowels do. The list below is built systematically:
+#
+#    - single-letter substitutions at each of the three positions, using other
+#      letters that share that position's vowel:
+#        /ɛ/  letters: F S L M N X        (eff, ess, ell, em, en, ex)
+#        /iː/ letters: B D G P T V C E Z  (bee, dee, gee, pee, tee, vee, cee...)
+#        /aɪ/ letters: I Y                (eye, why)
+#    - truncations: the acronym with no "guy", or "guy" with a letter missing
+#    - the /aɪ ... aɪ ɡaɪ/ tail on its own ("wifi guy", "sci fi guy")
+#
+#  Unrelated acronyms like "TV guy" or "CIA guy" are deliberately NOT here:
+#  their vowel contours (/iː iː/, /siː aɪ eɪ/) are far enough away that spending
+#  training capacity on them would dilute the near-miss cases that matter.
+#  Adding one back is a one-line edit if the device ever trips on it.
+#
+#  `phonemes` is given for every acronym phrase — plain text like "S T I guy"
+#  is a coin flip in TTS, which may spell it, slur it, or read it as a word.
+confusables:
+  samples_per_phrase: 1000
+
+  phrases:
+    # -- position 1 substituted: /ɛ?/ + bee + eye + guy -----------------------
+    - text: "N B I guy"
+      phonemes: "ˈɛn ˈbiː ˈaɪ ˈɡaɪ"      # closest possible miss: F -> N
+    - text: "M B I guy"
+      phonemes: "ˈɛm ˈbiː ˈaɪ ˈɡaɪ"
+    - text: "S B I guy"
+      phonemes: "ˈɛs ˈbiː ˈaɪ ˈɡaɪ"
+    - text: "L B I guy"
+      phonemes: "ˈɛl ˈbiː ˈaɪ ˈɡaɪ"
+
+    # -- position 2 substituted: eff + /?iː/ + eye + guy ----------------------
+    - text: "F D I guy"
+      phonemes: "ˈɛf ˈdiː ˈaɪ ˈɡaɪ"
+    - text: "F G I guy"
+      phonemes: "ˈɛf ˈdʒiː ˈaɪ ˈɡaɪ"
+    - text: "F T I guy"
+      phonemes: "ˈɛf ˈtiː ˈaɪ ˈɡaɪ"
+    - text: "F P I guy"
+      phonemes: "ˈɛf ˈpiː ˈaɪ ˈɡaɪ"
+    - text: "F V I guy"
+      phonemes: "ˈɛf ˈviː ˈaɪ ˈɡaɪ"
+
+    # -- position 3 substituted: eff + bee + /?/ + guy ------------------------
+    - text: "F B Y guy"
+      phonemes: "ˈɛf ˈbiː ˈwaɪ ˈɡaɪ"
+    - text: "F B E guy"
+      phonemes: "ˈɛf ˈbiː ˈiː ˈɡaɪ"
+
+    # -- two letters substituted: same contour, different acronym -------------
+    - text: "S T I guy"
+      phonemes: "ˈɛs ˈtiː ˈaɪ ˈɡaɪ"
+    - text: "L G I guy"
+      phonemes: "ˈɛl ˈdʒiː ˈaɪ ˈɡaɪ"
+    - text: "M P I guy"
+      phonemes: "ˈɛm ˈpiː ˈaɪ ˈɡaɪ"
+    - text: "N D I guy"
+      phonemes: "ˈɛn ˈdiː ˈaɪ ˈɡaɪ"
+    - text: "X C I guy"
+      phonemes: "ˈɛks ˈsiː ˈaɪ ˈɡaɪ"
+
+    # -- truncations and extensions -------------------------------------------
+    - text: "F B I"
+      phonemes: "ˈɛf ˈbiː ˈaɪ"           # acronym alone, no "guy"
+    - text: "B I guy"
+      phonemes: "ˈbiː ˈaɪ ˈɡaɪ"          # dropped the F
+    - text: "F B guy"
+      phonemes: "ˈɛf ˈbiː ˈɡaɪ"          # dropped the I
+    - text: "F B I agent"
+      phonemes: "ˈɛf ˈbiː ˈaɪ ˈeɪdʒənt"
+    - text: "F B I guide"
+      phonemes: "ˈɛf ˈbiː ˈaɪ ˈɡaɪd"     # trailing /d/ only
+
+    # -- the /aɪ ... aɪ ɡaɪ/ tail without the acronym --------------------------
+    - text: "wifi guy"
+    - text: "sci fi guy"
+
+# ---- Augmentation -----------------------------------------------------------
+#  How clips are roughed up before becoming training features. The goal is that
+#  a clip sounds like someone speaking across a room with a TV on — muffled is
+#  fine, unintelligible means you have gone too far.
+augmentation:
+  duration_s: 3.2
+  background_min_snr_db: -5      # toward 0 = cleaner, easier training data
+  background_max_snr_db: 20
+  min_jitter_s: 0.10             # random position of the phrase in the window
+  max_jitter_s: 0.50
+  probabilities:
+    AddBackgroundNoise: 0.85
+    RIR: 0.60                    # room reverb
+    Gain: 1.00
+    GainTransition: 0.25
+    AddColorNoise: 0.20
+    PitchShift: 0.15
+    SevenBandParametricEQ: 0.15
+    TanhDistortion: 0.10
+    BandStopFilter: 0.10
+
+# ---- Training ---------------------------------------------------------------
+training:
+  # One entry per phase. steps / learning_rates / class weights must be the
+  # same length. Use steps: [5000] for a quick end-to-end smoke test.
+  steps: [25000, 20000]
+  learning_rates: [0.001, 0.0001]
+  positive_class_weight: [2, 2]
+
+  # The main false-accept knob. Raise if the finished model triggers on ambient
+  # noise; lower if it is too deaf to fire when you actually speak.
+  negative_class_weight: [50, 60]
+
+  batch_size: 256                # drop to 128 on a GPU with under 12 GB
+  eval_step_interval: 500
+  clip_duration_ms: 1500
+
+  # The trainer must get ambient false accepts below this before it starts
+  # optimizing recall. 0.4 = at most one spurious wake roughly every 2.5 hours.
+  target_false_accepts_per_hour: 0.4
+
+# ---- Dataset sizes ----------------------------------------------------------
+datasets:
+  # Ambient background clips pulled from AudioSet. The full balanced set is
+  # 18683; lower it to shorten the download on a slow connection.
+  audioset_clips: 18683
+
+# ---- ESPHome manifest -------------------------------------------------------
+manifest:
+  author: "trout1758"
+  website: "https://github.com/trout1758-cpu/custom-micro-wake-word-model"
+  trained_languages: ["en"]
+
+  # Detection threshold baked into the manifest, not the model — you can edit
+  # this in the .json afterwards without retraining. Higher = fewer false
+  # triggers, lower = easier to wake. Training prints a cutoff table; start
+  # from the value there for your desired false-accept rate.
+  probability_cutoff: 0.90
+  sliding_window_size: 5
+  tensor_arena_size: 30000
+  minimum_esphome_version: "2024.7.0"
