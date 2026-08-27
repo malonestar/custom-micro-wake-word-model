@@ -118,7 +118,12 @@ fi
 say "Pipeline dependencies"
 "${PIP_INSTALL[@]}" \
   pyyaml tqdm numpy scipy librosa soundfile fsspec \
-  datasets mmap_ninja audiomentations tensorboard
+  datasets mmap_ninja tensorboard
+# microWakeWord's Augmentation hardcodes audiomentations.AddColorNoise (added
+# in 0.35.0) and .GainTransition. Colab preinstalls an older one and a plain
+# install will not replace a satisfied requirement, so upgrade it explicitly.
+"${PIP[@]}" install -q --upgrade 'audiomentations>=0.37.0'
+"$PYTHON" -c "import audiomentations as a; assert hasattr(a,'AddColorNoise') and hasattr(a,'GainTransition'), 'audiomentations too old: '+a.__version__; print('  audiomentations', a.__version__)"
 
 # ---------------------------------------------------------------------------
 say "Environment file"

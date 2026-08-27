@@ -295,7 +295,7 @@ cmd_supervise() {
       say "Done. Model + manifest are in $PIPELINE/output/"
       return 0
     fi
-    if printf '%s' "$tail_log" | grep -q "^\[fail\]"; then
+    if printf '%s' "$tail_log" | grep -qE '\[fail\] [0-9]+_'; then
       # A pipeline-level failure is a code/config problem, not a flaky VM —
       # re-provisioning would just hit it again. Stop and surface it.
       die "the pipeline reported a failure — see '$0 log'. Not auto-resuming a code failure."
