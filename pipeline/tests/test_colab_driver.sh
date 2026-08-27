@@ -65,3 +65,42 @@ if [ "$FAIL" -eq 0 ]; then
 else
   echo "colab driver: $PASS passed, $FAIL FAILED"; exit 1
 fi
+
+# --- sync_archive_down path validation -------------------------------------
+# A dying session makes `colab exec` emit diagnostics on stdout. Those lines
+# once reached the download loop and became directory names in the local
+# archive ("archive/[colab] Session 'wakeword' appears to be lost (404").
+# Only absolute paths under the remote archive may be treated as files.
+REMOTE_ARCHIVE="/content/archive"
+accepted() {
+  local out=""
+  while read -r rf; do
+    [ -n "$rf" ] || continue
+    case "$rf" in
+      "$REMOTE_ARCHIVE"/*) ;;
+      *) continue ;;
+    esac
+    out="$out$rf "
+  done <<< "$1"
+  printf '%s' "${out% }"
+}
+
+check "accepts a real archive path" \
+  "/content/archive/01_samples/generated_samples.tar" \
+  "$(accepted '/content/archive/01_samples/generated_samples.tar')"
+check "rejects a session-lost diagnostic" "" \
+  "$(accepted "[colab] Session 'wakeword' appears to be lost (404/401). Cleaning up.")"
+check "rejects a not-found diagnostic" "" \
+  "$(accepted "[colab] Session 'wakeword' not found.")"
+check "rejects paths outside the archive" "" \
+  "$(accepted '/etc/passwd')"
+check "keeps good paths, drops noise, in one batch" \
+  "/content/archive/a.tar /content/archive/b.tar" \
+  "$(accepted "$(printf '/content/archive/a.tar\n[colab] Session lost\n/content/archive/b.tar\n/tmp/evil')")"
+
+echo
+if [ "$FAIL" -eq 0 ]; then
+  echo "colab driver (with sync guards): $PASS passed"
+else
+  echo "colab driver: $PASS passed, $FAIL FAILED"; exit 1
+fi

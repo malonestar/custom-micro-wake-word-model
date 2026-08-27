@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import archive as archive_mod
 from . import config as config_mod
+from . import preflight as preflight_mod
 from .state import State
 from .steps import s01_samples, s02_datasets, s03_features, s04_train, s05_export
 
@@ -59,6 +60,9 @@ def main(argv=None) -> int:
                         help="clear a step's completion marker so it runs again")
     parser.add_argument("--preview", action="store_true",
                         help="generate a few sample clips to check pronunciation, then exit")
+    parser.add_argument("--preflight", action="store_true",
+                        help="rehearse the whole pipeline on tiny data and exit; "
+                             "catches version/API breakage in minutes rather than hours")
     parser.add_argument("--archive-dir", default=None,
                         help="durable directory (e.g. a mounted Drive) to mirror "
                              "completed steps to, so an ephemeral runtime can resume")
@@ -80,6 +84,14 @@ def main(argv=None) -> int:
 
     if args.preview:
         s01_samples.preview(cfg, log=log)
+        return 0
+
+    if args.preflight:
+        try:
+            preflight_mod.run(cfg, log=log)
+        except preflight_mod.PreflightError as exc:
+            log(f"\n[preflight-fail] {exc}")
+            return 3
         return 0
 
     if cfg.archive_dir:

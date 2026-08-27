@@ -12,6 +12,8 @@
 #
 #    ./colab/colab_run.sh setup      create the runtime and install everything
 #    ./colab/colab_run.sh preview    generate sample clips and fetch them here
+#    ./colab/colab_run.sh preflight  rehearse the whole pipeline on tiny data
+#                                    (~15 min) — do this before any long run
 #    ./colab/colab_run.sh start      launch the pipeline, detached
 #    ./colab/colab_run.sh supervise  keep-alive loop: pull the archive down as
 #                                    steps finish, fetch artifacts at the end
@@ -43,6 +45,13 @@ REMOTE_ARCHIVE="/content/archive"
 LOCAL_ARCHIVE="${WAKEWORD_LOCAL_ARCHIVE:-$PIPELINE/archive}"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+
+# One-line machine-readable outcome, so a watcher (or a future session) can see
+# what happened without parsing a multi-megabyte log.
+STATE_FILE="${WAKEWORD_STATE_FILE:-$PIPELINE/run_state}"
+write_state() {
+  printf '%s\n%s\n%s\n' "$1" "$(date -Is)" "${2:-}" > "$STATE_FILE" 2>/dev/null || true
+}
 warn() { printf '\033[33m    %s\033[0m\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -108,6 +117,13 @@ sync_archive_down() {
   [ -n "$files" ] || { echo "  (nothing in the remote archive yet)"; return 0; }
   while read -r rf; do
     [ -n "$rf" ] || continue
+    # remote_find returns CLI diagnostics too when a session dies mid-call
+    # ("[colab] Session ... not found"). Those once became directory names in
+    # the local archive. Only accept real absolute paths under the archive.
+    case "$rf" in
+      "$REMOTE_ARCHIVE"/*) ;;
+      *) continue ;;
+    esac
     local rel="${rf#$REMOTE_ARCHIVE/}"
     local lf="$LOCAL_ARCHIVE/$rel"
     local rsize lsize
@@ -217,6 +233,23 @@ cmd_preview() {
   warn "If not, edit wake_word.phonemes in $CONFIG, then re-run '$0 preview'."
 }
 
+cmd_preflight() {
+  session_exists || die "no session '$SESSION' — run '$0 setup' first"
+  say "Preflight: rehearsing the whole pipeline on tiny data"
+  warn "Catches version/API breakage in minutes instead of hours."
+  # Needs step 02's datasets; run it first if they are not there yet.
+  if ! remote_sh 60 "test -d $REMOTE_WORK/negative_datasets && test -d $REMOTE_WORK/mit_rirs"; then
+    say "Fetching datasets first (preflight reuses them; the real run will too)"
+    remote_sh 5400 "cd $REMOTE_ROOT/pipeline && \
+      WAKEWORD_WORK_DIR=$REMOTE_WORK ./run.sh $CONFIG --only 02_datasets" \
+      || die "dataset download failed"
+  fi
+  remote_sh 3000 "cd $REMOTE_ROOT/pipeline && \
+    WAKEWORD_WORK_DIR=$REMOTE_WORK ./run.sh $CONFIG --preflight" \
+    || die "PREFLIGHT FAILED — fix the cause above before starting a long run"
+  say "Preflight passed. Safe to '$0 start'."
+}
+
 cmd_start() {
   session_exists || die "no session '$SESSION' — run '$0 setup' first"
   say "Launching the pipeline, detached"
@@ -257,6 +290,7 @@ cmd_supervise() {
   local interval="${WAKEWORD_SYNC_INTERVAL:-300}"
   local auto="${WAKEWORD_AUTO_RESUME:-1}"   # 0 = stop on session loss instead of re-provisioning
   local resumes=0 max_resumes="${WAKEWORD_MAX_RESUMES:-40}"
+  local stalled=0 last_sig=""
   say "Supervising (sync ${interval}s, auto-resume=${auto}) until the run finishes"
   mkdir -p "$LOCAL_ARCHIVE"
 
@@ -289,15 +323,37 @@ cmd_supervise() {
     local tail_log
     tail_log="$(remote_sh 60 "tail -4 $REMOTE_WORK/run.log 2>/dev/null" || true)"
     printf '%s\n' "$tail_log" | sed 's/^/  log: /'
+
+    # Stall detection: a run whose log has not moved in a long time is wedged
+    # (a hung download, a dead kernel). Without this the loop would sit there
+    # reporting "still going" indefinitely, which is the failure mode this
+    # whole exercise exists to avoid.
+    local sig
+    sig="$(printf '%s' "$tail_log" | md5sum | cut -d' ' -f1)"
+    if [ "$sig" = "${last_sig:-}" ]; then
+      stalled=$((stalled + 1))
+    else
+      stalled=0
+      last_sig="$sig"
+    fi
+    local stall_limit="${WAKEWORD_STALL_CYCLES:-12}"
+    if [ "$stalled" -ge "$stall_limit" ]; then
+      write_state "stalled" "no log movement for $((stalled * interval))s"
+      die "run appears STALLED — log unchanged for $((stalled * interval))s. See '$0 log'."
+    fi
+
+    write_state "running" "$(printf '%s' "$tail_log" | tail -1)"
     if printf '%s' "$tail_log" | grep -q "Pipeline complete"; then
       say "Run finished. Fetching artifacts."
       cmd_fetch
+      write_state "complete" "artifacts in $PIPELINE/output"
       say "Done. Model + manifest are in $PIPELINE/output/"
       return 0
     fi
     if printf '%s' "$tail_log" | grep -qE '\[fail\] [0-9]+_'; then
       # A pipeline-level failure is a code/config problem, not a flaky VM —
       # re-provisioning would just hit it again. Stop and surface it.
+      write_state "failed" "$(remote_sh 60 "grep -A15 '\[fail\]' $REMOTE_WORK/run.log | tail -25" 2>/dev/null || echo 'see run.log')"
       die "the pipeline reported a failure — see '$0 log'. Not auto-resuming a code failure."
     fi
     sleep "$interval"
@@ -349,6 +405,7 @@ fi
 case "${1:-}" in
   setup)     cmd_setup ;;
   preview)   cmd_preview ;;
+  preflight) cmd_preflight ;;
   start)     cmd_start ;;
   supervise) cmd_supervise ;;
   sync)      cmd_sync ;;
