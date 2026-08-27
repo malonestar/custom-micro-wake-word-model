@@ -80,7 +80,8 @@ SHUTDOWN_LOG="$d/shutdown.log" PATH="$d/bin:$PATH" \
   WAKEWORD_AUTO_SHUTDOWN=1 timeout 60 "$d/repo/pipeline/gcp/vm_pipeline.sh" >/dev/null 2>&1
 rc=$?
 sleep "${FLUSH_WAIT:-22}"
-check "preflight fail: exits 1" "1" "$rc"
+# 99 is the reserved "terminal, do not restart" code systemd is told to honour.
+check "preflight fail: exits 99 (terminal, no restart)" "99" "$rc"
 check "preflight fail: state is failed" "failed" "$(head -1 "$d/work/vm_state" 2>/dev/null)"
 check "preflight fail: powers off" "yes" "$([ -s "$d/shutdown.log" ] && echo yes || echo no)"
 
@@ -105,7 +106,7 @@ SHUTDOWN_LOG="$d/shutdown.log" PATH="$d/bin:$PATH" \
   "$d/repo/pipeline/gcp/vm_pipeline.sh" >/dev/null 2>&1
 rc=$?
 sleep "${FLUSH_WAIT:-22}"
-check "retry cap: exits 1" "1" "$rc"
+check "retry cap: exits 99 (terminal, no restart)" "99" "$rc"
 check "retry cap: retried exactly twice" "2" "$(wc -l < "$d/work/attempts" 2>/dev/null | tr -d ' ')"
 check "retry cap: powers off" "yes" "$([ -s "$d/shutdown.log" ] && echo yes || echo no)"
 
@@ -129,6 +130,16 @@ SHUTDOWN_LOG="$d/shutdown.log" PATH="$d/bin:$PATH" \
   WAKEWORD_AUTO_SHUTDOWN=0 timeout 60 "$d/repo/pipeline/gcp/vm_pipeline.sh" >/dev/null 2>&1
 sleep "${FLUSH_WAIT:-22}"
 check "opt-out: does NOT power off" "no" "$([ -s "$d/shutdown.log" ] && echo yes || echo no)"
+
+# The unit must actually be told not to restart on that code, or the exit code
+# is decoration and the crash loop returns.
+STARTUP="$PIPE/gcp/startup.sh"
+grep -q 'RestartPreventExitStatus=99' "$STARTUP" \
+  && { PASS=$((PASS+1)); echo "  ok    systemd honours the terminal exit code"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  systemd unit lacks RestartPreventExitStatus=99"; }
+grep -q 'StartLimitBurst' "$STARTUP" \
+  && { PASS=$((PASS+1)); echo "  ok    restart backstop present"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  no StartLimitBurst backstop"; }
 
 echo
 if [ "$FAIL" -eq 0 ]; then echo "gcp shutdown: $PASS passed"; else echo "gcp shutdown: $PASS passed, $FAIL FAILED"; exit 1; fi

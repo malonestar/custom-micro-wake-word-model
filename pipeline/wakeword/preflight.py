@@ -51,8 +51,12 @@ def _check(label: str, fn, log):
 def _versions(log) -> None:
     """Record what is actually installed. Most failures here are version skew."""
     import importlib
+    # torchcodec is deliberately absent: importing it in a process that has
+    # already imported TensorFlow segfaults (TF 2.21 and the torch that
+    # torchcodec pulls in load conflicting CUDA runtimes). It is checked in a
+    # subprocess instead, below.
     for mod in ("tensorflow", "audiomentations", "datasets", "librosa",
-                "soundfile", "numpy", "scipy", "mmap_ninja", "torchcodec"):
+                "soundfile", "numpy", "scipy", "mmap_ninja"):
         try:
             m = importlib.import_module(mod)
             log(f"    {mod:16s} {getattr(m, '__version__', '?')}")
@@ -106,10 +110,23 @@ def run(cfg, log=print) -> None:
            lambda: _augmentation_api(cfg, log), log)
 
     def _audio_backend():
-        import datasets  # noqa: F401
-        import torchcodec  # noqa: F401  — datasets>=4 requires it to touch audio
+        # A subprocess, because this process has TensorFlow loaded and importing
+        # torchcodec alongside it segfaults. The real pipeline never mixes them:
+        # step 2 uses datasets without TF, steps 3-5 use TF without datasets.
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import torchcodec, datasets; print(torchcodec.__version__, datasets.__version__)"],
+            capture_output=True, text=True, timeout=180,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "datasets>=4 needs torchcodec to touch audio at all, and it is "
+                f"not usable here (exit {proc.returncode}):\n{proc.stderr[-800:]}"
+            )
+        log(f"    torchcodec/datasets: {proc.stdout.strip()}")
         return True
-    _check("datasets can handle audio (torchcodec importable)", _audio_backend, log)
+    _check("datasets can handle audio (torchcodec usable, checked out-of-process)",
+           _audio_backend, log)
 
     log("\n2/8 TTS")
     model = _check("piper voice model present",

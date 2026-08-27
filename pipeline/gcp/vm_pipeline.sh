@@ -21,6 +21,11 @@ BUCKET="${WAKEWORD_BUCKET:-}"          # gs://... : artifacts are copied here be
 STATE="$WORK/vm_state"
 LOG="$WORK/vm_pipeline.log"
 SHUTDOWN="${WAKEWORD_AUTO_SHUTDOWN:-1}"
+# Exit code reserved for "this is over, do not restart me". systemd's
+# Restart=on-failure cannot tell a crash worth retrying from a deliberate
+# terminal stop, and treated the latter as the former — 240 restarts, each
+# re-running the preflight, before anyone noticed.
+TERMINAL_EXIT=99
 MAX_ATTEMPTS="${WAKEWORD_MAX_ATTEMPTS:-3}"
 
 mkdir -p "$WORK"
@@ -76,7 +81,7 @@ if [ ! -f env.sh ]; then
   if ! ./bootstrap.sh; then
     state "failed" "bootstrap failed — a dependency problem, retrying will not help"
     power_off "bootstrap failed"
-    exit 1
+    exit "$TERMINAL_EXIT"
   fi
 fi
 
@@ -86,13 +91,13 @@ if [ ! -f "$WORK/.preflight_ok" ]; then
   say "Preflight"
   # Datasets first; the preflight needs them and so does the real run.
   WAKEWORD_WORK_DIR="$WORK" ./run.sh "$CONFIG" --only 02_datasets || {
-    state "failed" "dataset download failed"; power_off "datasets failed"; exit 1; }
+    state "failed" "dataset download failed"; power_off "datasets failed"; exit "$TERMINAL_EXIT"; }
   if WAKEWORD_WORK_DIR="$WORK" ./run.sh "$CONFIG" --preflight; then
     touch "$WORK/.preflight_ok"
   else
     state "failed" "PREFLIGHT FAILED — the chain is broken; needs a code fix"
     power_off "preflight failed"
-    exit 1
+    exit "$TERMINAL_EXIT"
   fi
 fi
 
@@ -117,7 +122,7 @@ while :; do
     fi
     state "failed" "pipeline reported success but produced no .tflite"
     power_off "no artifact"
-    exit 1
+    exit "$TERMINAL_EXIT"
   fi
 
   say "run.sh exited $rc"
@@ -127,7 +132,7 @@ while :; do
   if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
     state "failed" "failed $attempt times (last rc=$rc) — needs a code fix"
     power_off "repeated failure"
-    exit 1
+    exit "$TERMINAL_EXIT"
   fi
   retry_sleep="${WAKEWORD_RETRY_SLEEP:-60}"
   say "retrying in ${retry_sleep}s (progress is preserved on disk)"

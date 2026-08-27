@@ -76,9 +76,14 @@ Environment=WAKEWORD_BUCKET=$BUCKET
 Environment=WAKEWORD_AUTO_SHUTDOWN=1
 ExecStart=$INSTALL/custom-micro-wake-word-model/pipeline/gcp/vm_pipeline.sh
 # Only transient crashes are retried here; vm_pipeline.sh decides when an
-# outcome is terminal and powers the machine off itself.
+# outcome is terminal, powers the machine off, and exits 99 to say so.
 Restart=on-failure
+RestartPreventExitStatus=99
 RestartSec=30
+# Backstop: even for genuinely transient crashes, five restarts in an hour
+# means something is wrong that restarting will not fix.
+StartLimitIntervalSec=3600
+StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
