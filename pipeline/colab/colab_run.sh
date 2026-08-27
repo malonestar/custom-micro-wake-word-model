@@ -254,27 +254,51 @@ cmd_sync() {
 }
 
 cmd_supervise() {
-  session_exists || die "no session '$SESSION' — run '$0 setup && $0 start' first"
   local interval="${WAKEWORD_SYNC_INTERVAL:-300}"
-  say "Supervising: sync every ${interval}s until the run finishes or the session is lost"
+  local auto="${WAKEWORD_AUTO_RESUME:-1}"   # 0 = stop on session loss instead of re-provisioning
+  local resumes=0 max_resumes="${WAKEWORD_MAX_RESUMES:-40}"
+  say "Supervising (sync ${interval}s, auto-resume=${auto}) until the run finishes"
   mkdir -p "$LOCAL_ARCHIVE"
+
   while true; do
     if ! session_exists; then
-      warn "Session '$SESSION' is gone. What is in $LOCAL_ARCHIVE is what survived."
-      warn "Resume with:  $0 setup && $0 start && $0 supervise"
-      return 1
+      # First priority on a loss: rescue whatever the last session archived.
+      # (It may be nothing if it died mid-step; that is expected.)
+      if [ "$auto" != 1 ]; then
+        warn "Session gone. Local archive holds: $(find "$LOCAL_ARCHIVE" -name '*.tar' 2>/dev/null | wc -l) step tar(s)."
+        warn "Resume with:  $0 setup && $0 start && $0 supervise"
+        return 1
+      fi
+      resumes=$((resumes + 1))
+      if [ "$resumes" -gt "$max_resumes" ]; then
+        die "gave up after $max_resumes re-provision attempts — Colab is not holding a session long enough"
+      fi
+      warn "Session gone (resume #$resumes/$max_resumes). Re-provisioning..."
+      if ! cmd_setup; then
+        warn "setup failed; retrying in ${interval}s"
+        sleep "$interval"; continue
+      fi
+      if ! cmd_start; then
+        warn "start failed; retrying in ${interval}s"
+        sleep "$interval"; continue
+      fi
+      say "Resumed. Back to watching."
     fi
+
     sync_archive_down
     local tail_log
-    tail_log="$(remote_sh 60 "tail -3 $REMOTE_WORK/run.log 2>/dev/null" || true)"
+    tail_log="$(remote_sh 60 "tail -4 $REMOTE_WORK/run.log 2>/dev/null" || true)"
     printf '%s\n' "$tail_log" | sed 's/^/  log: /'
     if printf '%s' "$tail_log" | grep -q "Pipeline complete"; then
       say "Run finished. Fetching artifacts."
       cmd_fetch
+      say "Done. Model + manifest are in $PIPELINE/output/"
       return 0
     fi
     if printf '%s' "$tail_log" | grep -q "^\[fail\]"; then
-      die "the pipeline reported a failure — see '$0 log'"
+      # A pipeline-level failure is a code/config problem, not a flaky VM —
+      # re-provisioning would just hit it again. Stop and surface it.
+      die "the pipeline reported a failure — see '$0 log'. Not auto-resuming a code failure."
     fi
     sleep "$interval"
   done
