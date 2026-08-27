@@ -21,11 +21,12 @@ wake_word:
   # text makes Piper guess: some voices say "fibby", some spell it, some skip
   # letters. Phonemes force all ~900 LibriTTS speakers to say the same thing.
   #
-  #   ˈɛf   = "eff"    ˈbiː = "bee"    ˈaɪ = "eye"    ˈɡaɪ = "guy"
+  #   ɛf = "eff"    biː = "bee"    aɪ = "eye"    ɡaɪ = "guy"
   #
-  # Each letter carries primary stress because the acronym is enunciated, not
-  # slurred — that matches a neutral Northwestern American delivery.
-  phonemes: "ˈɛf ˈbiː ˈaɪ ˈɡaɪ"
+  # Primary stress on "eff" and "eye" only; "bee" and "guy" ride along
+  # unstressed. Chosen by ear over ~20 candidates: stressing every element
+  # (or "bee"/"guy") made espeak append a schwa — "EFF-uh ... EYE-uh guy".
+  phonemes: "ˈɛf biː ˈaɪ ɡaɪ"
 
   # Fallback if you ever want plain-text generation instead (set use_phonemes
   # to false). Kept for reference and for the manifest.
@@ -79,55 +80,55 @@ confusables:
   phrases:
     # -- position 1 substituted: /ɛ?/ + bee + eye + guy -----------------------
     - text: "N B I guy"
-      phonemes: "ˈɛn ˈbiː ˈaɪ ˈɡaɪ"      # closest possible miss: F -> N
+      phonemes: "ˈɛn biː ˈaɪ ɡaɪ"      # closest possible miss: F -> N
     - text: "M B I guy"
-      phonemes: "ˈɛm ˈbiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛm biː ˈaɪ ɡaɪ"
     - text: "S B I guy"
-      phonemes: "ˈɛs ˈbiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛs biː ˈaɪ ɡaɪ"
     - text: "L B I guy"
-      phonemes: "ˈɛl ˈbiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛl biː ˈaɪ ɡaɪ"
 
     # -- position 2 substituted: eff + /?iː/ + eye + guy ----------------------
     - text: "F D I guy"
-      phonemes: "ˈɛf ˈdiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛf diː ˈaɪ ɡaɪ"
     - text: "F G I guy"
-      phonemes: "ˈɛf ˈdʒiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛf dʒiː ˈaɪ ɡaɪ"
     - text: "F T I guy"
-      phonemes: "ˈɛf ˈtiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛf tiː ˈaɪ ɡaɪ"
     - text: "F P I guy"
-      phonemes: "ˈɛf ˈpiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛf piː ˈaɪ ɡaɪ"
     - text: "F V I guy"
-      phonemes: "ˈɛf ˈviː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛf viː ˈaɪ ɡaɪ"
 
     # -- position 3 substituted: eff + bee + /?/ + guy ------------------------
     - text: "F B Y guy"
-      phonemes: "ˈɛf ˈbiː ˈwaɪ ˈɡaɪ"
+      phonemes: "ˈɛf biː ˈwaɪ ɡaɪ"
     - text: "F B E guy"
-      phonemes: "ˈɛf ˈbiː ˈiː ˈɡaɪ"
+      phonemes: "ˈɛf biː ˈiː ɡaɪ"
 
     # -- two letters substituted: same contour, different acronym -------------
     - text: "S T I guy"
-      phonemes: "ˈɛs ˈtiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛs tiː ˈaɪ ɡaɪ"
     - text: "L G I guy"
-      phonemes: "ˈɛl ˈdʒiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛl dʒiː ˈaɪ ɡaɪ"
     - text: "M P I guy"
-      phonemes: "ˈɛm ˈpiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛm piː ˈaɪ ɡaɪ"
     - text: "N D I guy"
-      phonemes: "ˈɛn ˈdiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛn diː ˈaɪ ɡaɪ"
     - text: "X C I guy"
-      phonemes: "ˈɛks ˈsiː ˈaɪ ˈɡaɪ"
+      phonemes: "ˈɛks siː ˈaɪ ɡaɪ"
 
     # -- truncations and extensions -------------------------------------------
     - text: "F B I"
-      phonemes: "ˈɛf ˈbiː ˈaɪ"           # acronym alone, no "guy"
+      phonemes: "ˈɛf biː ˈaɪ"           # acronym alone, no "guy"
     - text: "B I guy"
-      phonemes: "ˈbiː ˈaɪ ˈɡaɪ"          # dropped the F
+      phonemes: "ˈbiː ˈaɪ ɡaɪ"          # dropped the F
     - text: "F B guy"
-      phonemes: "ˈɛf ˈbiː ˈɡaɪ"          # dropped the I
+      phonemes: "ˈɛf biː ɡaɪ"          # dropped the I
     - text: "F B I agent"
-      phonemes: "ˈɛf ˈbiː ˈaɪ ˈeɪdʒənt"
+      phonemes: "ˈɛf biː ˈaɪ ˈeɪdʒənt"
     - text: "F B I guide"
-      phonemes: "ˈɛf ˈbiː ˈaɪ ˈɡaɪd"     # trailing /d/ only
+      phonemes: "ˈɛf biː ˈaɪ ɡaɪd"     # trailing /d/ only
 
     # -- the /aɪ ... aɪ ɡaɪ/ tail without the acronym --------------------------
     - text: "wifi guy"

@@ -91,7 +91,7 @@ def test_config_reads_wake_word_and_confusables():
     assert cfg.label == "FBI guy"
     assert cfg.model_name == "fbi_guy_v1"
     assert cfg.wake_word_phrase.use_phonemes
-    assert cfg.wake_word_phrase.piper_input == "ˈɛf ˈbiː ˈaɪ ˈɡaɪ"
+    assert cfg.wake_word_phrase.piper_input == "ˈɛf biː ˈaɪ ɡaɪ"
 
     texts = [p.text for p in cfg.confusables]
     assert "S T I guy" in texts and "L G I guy" in texts
