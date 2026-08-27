@@ -37,10 +37,18 @@ report() {  # code, headline, detail
 }
 
 PIDFILE="${WAKEWORD_SUPERVISOR_PIDFILE:-$PIPELINE/supervisor.pid}"
-supervisor_alive() {
-  [ -f "$PIDFILE" ] || return 1
-  local pid; pid="$(cat "$PIDFILE" 2>/dev/null)"
+LAUNCHER_PIDFILE="${WAKEWORD_LAUNCHER_PIDFILE:-$PIPELINE/launcher.pid}"
+
+_pid_alive() {
+  [ -f "$1" ] || return 1
+  local pid; pid="$(cat "$1" 2>/dev/null)"
   [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# Either counts as alive. Waiting out a 503 in the launcher's provisioning loop
+# is a healthy state, not a death, and must not be reported as one.
+supervisor_alive() {
+  _pid_alive "$PIDFILE" || _pid_alive "$LAUNCHER_PIDFILE"
 }
 
 # Give a just-launched supervisor a moment to appear before declaring it absent.
