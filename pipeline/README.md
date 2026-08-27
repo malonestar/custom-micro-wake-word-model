@@ -197,8 +197,17 @@ two sessions. The archive is what makes that cheap instead of painful.
 ### Once
 
 ```bash
-uv tool install google-colab-cli     # or: pipx install google-colab-cli
+uv tool install google-colab-cli \
+  --with 'jupyter-kernel-client @ git+https://github.com/googlecolab/jupyter-kernel-client.git'
 ```
+
+The `--with` is **not optional**. `google-colab-cli`'s published metadata leaves
+`jupyter-kernel-client` unpinned, but the tool actually needs Google's fork of
+it (their `uv.lock` pins the git repo). A plain `uv tool install` pulls an
+unrelated PyPI package of the same name, and `colab exec` — which this whole
+driver runs on — dies with `module 'jupyter_kernel_client' has no attribute
+'KernelClient'`. If you already installed it the plain way, re-run the command
+above with `--force`.
 
 If `colab` is then "not found", it is a PATH problem, not a failed install —
 `uv` puts tools in `~/.local/bin`.

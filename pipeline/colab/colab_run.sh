@@ -38,8 +38,14 @@ warn() { printf '\033[33m    %s\033[0m\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 command -v colab >/dev/null 2>&1 || die "the 'colab' CLI is not installed.
-  Install it with:  uv tool install google-colab-cli
-  If it is installed but not found, add ~/.local/bin to your PATH."
+  Install it with:
+    uv tool install google-colab-cli \\
+      --with 'jupyter-kernel-client @ git+https://github.com/googlecolab/jupyter-kernel-client.git'
+  The --with is not optional: google-colab-cli's PyPI metadata leaves
+  jupyter-kernel-client unpinned, so a plain install pulls an unrelated
+  same-named package from PyPI and 'colab exec' dies with
+  \"module 'jupyter_kernel_client' has no attribute 'KernelClient'\".
+  If colab is installed but not found, add ~/.local/bin to your PATH."
 
 # --- running things on the runtime -------------------------------------------
 # `colab exec` reads Python from stdin and takes no positional argument, and
@@ -90,8 +96,12 @@ cmd_setup() {
   colab status -s "$SESSION"
 
   say "Confirming the GPU is visible inside the runtime"
-  remote_sh 60 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader' \
-    || warn "nvidia-smi failed — the runtime may have been allocated without a GPU"
+  if ! remote_sh 60 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader'; then
+    warn "Could not read the GPU from inside the runtime."
+    warn "If the error mentions jupyter_kernel_client / KernelClient, the CLI"
+    warn "was installed without Google's fork — reinstall per the note at the"
+    warn "top of this script, then re-run 'setup'. The session is left running."
+  fi
 
   say "Checking disk space"
   # The intermediates run 30-50 GB. Colab runtimes are usually comfortable but
