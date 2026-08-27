@@ -53,6 +53,18 @@ OPTIONAL_ARTIFACTS = frozenset({
 })
 
 
+def _skipped_steps() -> frozenset[str]:
+    """Steps the operator has excluded from archiving via WAKEWORD_ARCHIVE_SKIP.
+
+    On an ephemeral runtime reached over a home connection, the feature set
+    (tens of GB) costs more to upload back on resume than to regenerate. The
+    Colab driver sets this to "03_features" so a lost session re-runs feature
+    generation instead of waiting hours on an upload.
+    """
+    raw = os.environ.get("WAKEWORD_ARCHIVE_SKIP", "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
 def _tar_path(archive_dir: Path, step: str, name: str) -> Path:
     return archive_dir / step / f"{name}.tar"
 
@@ -65,6 +77,9 @@ def archive_step(cfg, step: str, archive_dir: Path, log=print) -> int:
     """
     artifacts = STEP_ARTIFACTS.get(step)
     if not artifacts:
+        return 0
+    if step in _skipped_steps():
+        log(f"  {step}: excluded from archiving (WAKEWORD_ARCHIVE_SKIP)")
         return 0
 
     dest_dir = archive_dir / step
@@ -113,7 +128,10 @@ def restore_all(cfg, archive_dir: Path, log=print) -> list[str]:
     cfg.work.mkdir(parents=True, exist_ok=True)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
 
+    skip = _skipped_steps()
     for step, artifacts in STEP_ARTIFACTS.items():
+        if step in skip:
+            continue
         marker_src = archive_dir / step / f"{step}.done"
         if not marker_src.exists():
             continue
@@ -161,6 +179,22 @@ def restore_all(cfg, archive_dir: Path, log=print) -> list[str]:
         if complete:
             shutil.copy2(marker_src, cfg.state_dir / f"{step}.done")
             restored_steps.append(step)
+
+    # A run killed mid-training left no 04_train.done and no trained_models.tar,
+    # but the CheckpointMirror wrote trained_models_live/. Restore that into the
+    # work dir (no marker) so training resumes from the last mirrored step
+    # instead of from zero.
+    live = archive_dir / "04_train" / "trained_models_live"
+    target = cfg.work / "trained_models"
+    if live.is_dir() and not target.exists():
+        started = time.time()
+        log(f"  restoring in-progress training checkpoint from {live}")
+        try:
+            shutil.copytree(live, target)
+            log(f"    restored in {time.time() - started:.0f}s")
+        except Exception as exc:
+            shutil.rmtree(target, ignore_errors=True)
+            log(f"  checkpoint restore failed ({exc}) — training will start fresh")
 
     if restored_steps:
         log(f"  restored completed steps: {', '.join(restored_steps)}")

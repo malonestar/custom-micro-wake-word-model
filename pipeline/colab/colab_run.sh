@@ -226,6 +226,7 @@ cmd_start() {
   remote_sh 300 "cd $REMOTE_ROOT/pipeline && \
     WAKEWORD_WORK_DIR=$REMOTE_WORK \
     WAKEWORD_ARCHIVE_DIR=$REMOTE_ARCHIVE \
+    WAKEWORD_ARCHIVE_SKIP='${WAKEWORD_ARCHIVE_SKIP:-03_features}' \
     ./run.sh $CONFIG --detach"
 
   say "Running detached on the runtime."

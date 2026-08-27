@@ -210,3 +210,54 @@ def test_archived_tar_contains_a_relative_top_level_directory(tmp_path):
         names = tar.getnames()
     assert all(not n.startswith("/") for n in names)
     assert names[0].split("/")[0] == "generated_samples"
+
+
+def test_archive_skip_env_excludes_a_step(tmp_path, monkeypatch):
+    """WAKEWORD_ARCHIVE_SKIP keeps a huge step out of the round-trip."""
+    monkeypatch.setenv("WAKEWORD_ARCHIVE_SKIP", "03_features")
+    cfg = _work(tmp_path)
+    _populate(cfg, "generated_augmented_features", ("f0", "f1"))
+    _mark_done(cfg, "03_features")
+    arc = tmp_path / "archive"
+
+    assert archive.archive_step(cfg, "03_features", arc, log=lambda *a: None) == 0
+    assert not (arc / "03_features").exists()
+
+    # And restore leaves it alone even if a stale marker sits in the archive.
+    (arc / "03_features").mkdir(parents=True)
+    (arc / "03_features" / "03_features.done").write_text("{}")
+    fresh = _work(tmp_path, "fresh")
+    assert "03_features" not in archive.restore_all(fresh, arc, log=lambda *a: None)
+    assert not (fresh.state_dir / "03_features.done").exists()
+
+
+def test_mid_training_checkpoint_is_restored_without_a_marker(tmp_path):
+    """A run killed during training resumes from the mirrored checkpoint."""
+    arc = tmp_path / "archive"
+    live = arc / "04_train" / "trained_models_live" / "fbi_guy_v1"
+    live.mkdir(parents=True)
+    (live / "checkpoint").write_text("model_checkpoint_path: ckpt-12000")
+
+    fresh = _work(tmp_path, "fresh")
+    archive.restore_all(fresh, arc, log=lambda *a: None)
+
+    restored = fresh.work / "trained_models" / "fbi_guy_v1" / "checkpoint"
+    assert restored.read_text() == "model_checkpoint_path: ckpt-12000"
+    # No completed-step marker — training is not done, just resumable.
+    assert not (fresh.state_dir / "04_train.done").exists()
+
+
+def test_checkpoint_restore_skipped_when_work_dir_already_has_one(tmp_path):
+    arc = tmp_path / "archive"
+    live = arc / "04_train" / "trained_models_live"
+    live.mkdir(parents=True)
+    (live / "stale").write_text("old")
+
+    fresh = _work(tmp_path, "fresh")
+    (fresh.work / "trained_models").mkdir(parents=True)
+    (fresh.work / "trained_models" / "current").write_text("newer local work")
+
+    archive.restore_all(fresh, arc, log=lambda *a: None)
+
+    assert (fresh.work / "trained_models" / "current").exists()
+    assert not (fresh.work / "trained_models" / "stale").exists()
