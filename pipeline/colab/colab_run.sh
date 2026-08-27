@@ -343,6 +343,13 @@ cmd_sync() {
 }
 
 cmd_supervise() {
+  # A PID file rather than pgrep -f: any shell whose command line happens to
+  # contain the pattern (including the watcher's own wrapper) matches a pattern
+  # search, so "is the supervisor alive" silently answers yes forever.
+  SUPERVISOR_PIDFILE="${WAKEWORD_SUPERVISOR_PIDFILE:-$PIPELINE/supervisor.pid}"
+  echo $$ > "$SUPERVISOR_PIDFILE"
+  trap 'rm -f "$SUPERVISOR_PIDFILE"' EXIT
+
   local interval="${WAKEWORD_SYNC_INTERVAL:-300}"
   local auto="${WAKEWORD_AUTO_RESUME:-1}"   # 0 = stop on session loss instead of re-provisioning
   local resumes=0 max_resumes="${WAKEWORD_MAX_RESUMES:-40}"
