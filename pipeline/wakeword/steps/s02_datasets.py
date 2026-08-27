@@ -12,6 +12,7 @@ to re-enter after a crash.
 from __future__ import annotations
 
 import io
+import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -162,6 +163,65 @@ def _negative_features(work: Path, log) -> None:
         log(f"  {extracted.name}: ready")
 
 
+# The ambient eval sets are long continuous recordings. microWakeWord slides a
+# window over them and materialises EVERY window as one float32 array before
+# scoring, so their length translates directly into a single huge allocation:
+# the stock dinner_party_eval validation split is ~9.7 h of audio -> 116,022
+# windows -> 3.6 GB, which OOM-kills training on a 12 GB Colab runtime.
+#
+# Trimming the recordings is the one lever that does not require patching
+# upstream. It costs precision in the false-accepts-per-hour estimate (fewer
+# hours observed) but not correctness — the metric is already a rate.
+TRIMMED_EVAL_DIRNAME = "dinner_party_eval_trimmed"
+
+
+def trim_ambient_eval(cfg, max_frames: int, log=print) -> Path | None:
+    """Write a length-capped copy of the ambient eval set. Returns its path.
+
+    Frames are taken from the head of each recording and the budget is shared
+    evenly, so every recording stays represented rather than keeping the first
+    few whole and dropping the rest.
+    """
+    from mmap_ninja.ragged import RaggedMmap
+
+    source = cfg.negative_datasets / "dinner_party_eval"
+    dest = cfg.negative_datasets / TRIMMED_EVAL_DIRNAME
+    if not source.exists():
+        log("  no dinner_party_eval to trim")
+        return None
+    if dest.exists() and any(dest.glob("**/*_mmap")):
+        log(f"  {TRIMMED_EVAL_DIRNAME}: already present, skipping")
+        return dest
+
+    for mmap_dir in sorted(source.glob("**/*_mmap")):
+        rel = mmap_dir.relative_to(source)
+        out_dir = dest / rel
+        original = RaggedMmap(str(mmap_dir))
+        n = len(original)
+        if n == 0:
+            continue
+        budget = max(1, max_frames // n)
+        kept = [min(original[i].shape[0], budget) for i in range(n)]
+        log(f"  {rel}: {n} recordings, "
+            f"{sum(original[i].shape[0] for i in range(n)):,} -> {sum(kept):,} frames")
+
+        out_dir.parent.mkdir(parents=True, exist_ok=True)
+        # A partial mmap would look complete to the skip check above.
+        staging = out_dir.with_name(out_dir.name + ".part")
+        shutil.rmtree(staging, ignore_errors=True)
+
+        def _gen(orig=original, keep=kept):
+            for i, k in enumerate(keep):
+                yield orig[i][:k]
+
+        RaggedMmap.from_generator(out_dir=str(staging), sample_generator=_gen(),
+                                  batch_size=4, verbose=False)
+        staging.rename(out_dir)
+
+    log(f"  wrote {dest}")
+    return dest
+
+
 def run(cfg, log=print) -> None:
     clips = int(cfg.datasets.get("audioset_clips", 18683))
 
@@ -172,3 +232,8 @@ def run(cfg, log=print) -> None:
 
     log("\n=== Pre-computed negative feature sets ===")
     _negative_features(cfg.work, log)
+
+    max_frames = cfg.datasets.get("ambient_eval_max_frames")
+    if max_frames:
+        log("\n=== Trimming the ambient eval set for a RAM-limited machine ===")
+        trim_ambient_eval(cfg, int(max_frames), log=log)

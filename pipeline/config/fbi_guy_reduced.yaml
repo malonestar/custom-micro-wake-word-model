@@ -172,6 +172,14 @@ training:
   # noise; lower if it is too deaf to fire when you actually speak.
   negative_class_weight: [50, 60]
 
+  # RAM, not quality, picks this list. microWakeWord loads every feature set
+  # eagerly, and `speech` (350k samples) + `no_speech` (238k) OOM-kill the
+  # trainer on a 12 GB Colab runtime. dinner_party is the most valuable of the
+  # three anyway — multi-speaker conversation and TV noise are what actually
+  # cause false triggers in a living room. On a machine with ~30 GB (a GCP VM),
+  # drop this line to train against all three.
+  negative_sets: ["dinner_party"]
+
   batch_size: 256                # drop to 128 on a GPU with under 12 GB
   eval_step_interval: 500
   clip_duration_ms: 1500
@@ -185,6 +193,15 @@ datasets:
   # Ambient background clips pulled from AudioSet. The full balanced set is
   # 18683; lower it to shorten the download on a slow connection.
   audioset_clips: 6000
+
+  # Cap the ambient false-accept eval recordings, per split, in 10 ms frames.
+  # microWakeWord slides a window over these and builds every window into one
+  # float32 array before scoring: the stock ~9.7 h validation set becomes
+  # 116,022 windows = 3.6 GB and OOM-kills the trainer on a 12 GB Colab
+  # runtime. 720,000 frames is 2 h per split, ~0.75 GB, which fits alongside
+  # TensorFlow. Fewer hours observed makes the FA/hr figure noisier, not wrong.
+  # Remove this on a machine with ~30 GB to score against the full set.
+  ambient_eval_max_frames: 720000
 
 # ---- ESPHome manifest -------------------------------------------------------
 manifest:

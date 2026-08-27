@@ -46,36 +46,59 @@ def build_config(cfg, log=print) -> dict:
     have_confusables = (cfg.confusable_features / "training" / "wakeword_mmap").exists()
     have_real = (cfg.real_features / "training" / "wakeword_mmap").exists()
 
+    # microWakeWord loads every feature set eagerly at training start, so the
+    # negative sets dominate peak RAM. `speech` (350k samples) and `no_speech`
+    # (238k) together will not fit a 12 GB Colab runtime — the trainer is
+    # OOM-killed before step 1. `negative_sets` lets a constrained machine
+    # train on a subset. dinner_party_eval is never optional: it is what scores
+    # the false-accepts-per-hour metric the trainer minimises.
+    ALL_NEGATIVES = {
+        "speech": {"sampling_weight": 10.0, "penalty_weight": 2.5,
+                   "truncation_strategy": "random"},
+        # Multi-speaker conversation and TV-like audio: the main source of
+        # real-world false triggers in a living room.
+        "dinner_party": {"sampling_weight": 15.0, "penalty_weight": 3.0,
+                         "truncation_strategy": "random"},
+        "no_speech": {"sampling_weight": 5.0, "penalty_weight": 1.0,
+                      "truncation_strategy": "random"},
+    }
+    wanted = list(t.get("negative_sets", list(ALL_NEGATIVES)))
+    unknown = [n for n in wanted if n not in ALL_NEGATIVES]
+    if unknown:
+        raise ValueError(
+            f"unknown negative_sets {unknown}; choose from {sorted(ALL_NEGATIVES)}"
+        )
+
     features = [
         {
             "features_dir": str(cfg.positive_features),
             "sampling_weight": 8.0, "penalty_weight": 2.0,
             "truth": True, "truncation_strategy": "truncate_start", "type": "mmap",
         },
-        {
-            "features_dir": str(cfg.negative_datasets / "speech"),
-            "sampling_weight": 10.0, "penalty_weight": 2.5,
-            "truth": False, "truncation_strategy": "random", "type": "mmap",
-        },
-        {
-            # Multi-speaker conversation and TV-like audio: the main source of
-            # real-world false triggers in a living room.
-            "features_dir": str(cfg.negative_datasets / "dinner_party"),
-            "sampling_weight": 15.0, "penalty_weight": 3.0,
-            "truth": False, "truncation_strategy": "random", "type": "mmap",
-        },
-        {
-            "features_dir": str(cfg.negative_datasets / "no_speech"),
-            "sampling_weight": 5.0, "penalty_weight": 1.0,
-            "truth": False, "truncation_strategy": "random", "type": "mmap",
-        },
-        {
-            # Held out: scores the false-accepts-per-hour metric, never trained on.
-            "features_dir": str(cfg.negative_datasets / "dinner_party_eval"),
-            "sampling_weight": 0.0, "penalty_weight": 1.0,
-            "truth": False, "truncation_strategy": "split", "type": "mmap",
-        },
     ]
+    for name in wanted:
+        spec = ALL_NEGATIVES[name]
+        features.append({
+            "features_dir": str(cfg.negative_datasets / name),
+            "sampling_weight": spec["sampling_weight"],
+            "penalty_weight": spec["penalty_weight"],
+            "truth": False,
+            "truncation_strategy": spec["truncation_strategy"],
+            "type": "mmap",
+        })
+    # Held out: scores the false-accepts-per-hour metric, never trained on.
+    # Prefer a trimmed copy when step 2 produced one — the full-length eval set
+    # is materialised as a single multi-GB array and will not fit a small
+    # runtime. See trim_ambient_eval in s02_datasets.
+    from .s02_datasets import TRIMMED_EVAL_DIRNAME
+    trimmed = cfg.negative_datasets / TRIMMED_EVAL_DIRNAME
+    eval_dir = trimmed if any(trimmed.glob("**/*_mmap")) else \
+        cfg.negative_datasets / "dinner_party_eval"
+    features.append({
+        "features_dir": str(eval_dir),
+        "sampling_weight": 0.0, "penalty_weight": 1.0,
+        "truth": False, "truncation_strategy": "split", "type": "mmap",
+    })
 
     if have_confusables:
         features.append({
@@ -118,6 +141,8 @@ def build_config(cfg, log=print) -> dict:
                 f"{n_phases} training phases — they must match"
             )
 
+    log(f"  negative sets:        {', '.join(wanted) or '(none!)'}")
+    log(f"  ambient eval:         {eval_dir.name}")
     log(f"  confusable negatives: {'yes' if have_confusables else 'NO'}")
     log(f"  real recordings:      {'yes' if have_real else 'no'}")
     total = sum(f["sampling_weight"] for f in features)

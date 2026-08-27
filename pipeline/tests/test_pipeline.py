@@ -220,3 +220,74 @@ def test_prepare_train_dir_is_fine_with_nothing_there(tmp_path):
     assert s04_train._prepare_train_dir(cfg, log=lambda *a: None) is False
     assert cfg.train_dir.parent.exists()
     assert not cfg.train_dir.exists()
+
+
+def test_negative_sets_defaults_to_all_three(tmp_path):
+    from wakeword.steps import s04_train
+
+    cfg = load(CONFIG, work_dir=str(tmp_path))
+    built = s04_train.build_config(cfg, log=lambda *a: None)
+    names = [Path(f["features_dir"]).name for f in built["features"]]
+    for expected in ("speech", "dinner_party", "no_speech", "dinner_party_eval"):
+        assert expected in names
+
+
+def test_negative_sets_can_be_restricted_for_low_ram(tmp_path):
+    """A 12 GB runtime cannot hold speech + no_speech; training is OOM-killed."""
+    from wakeword.steps import s04_train
+
+    cfg = load(CONFIG, work_dir=str(tmp_path))
+    cfg.training["negative_sets"] = ["dinner_party"]
+    built = s04_train.build_config(cfg, log=lambda *a: None)
+    names = [Path(f["features_dir"]).name for f in built["features"]]
+
+    assert "speech" not in names
+    assert "no_speech" not in names
+    assert "dinner_party" in names
+    # The eval set is never dropped — it scores the metric training minimises.
+    assert "dinner_party_eval" in names
+    evals = [f for f in built["features"] if f["features_dir"].endswith("dinner_party_eval")]
+    assert evals[0]["sampling_weight"] == 0.0
+
+
+def test_unknown_negative_set_is_rejected(tmp_path):
+    from wakeword.steps import s04_train
+
+    cfg = load(CONFIG, work_dir=str(tmp_path))
+    cfg.training["negative_sets"] = ["dinner_party", "not_a_real_set"]
+    try:
+        s04_train.build_config(cfg, log=lambda *a: None)
+    except ValueError as exc:
+        assert "not_a_real_set" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for an unknown negative set")
+
+
+def test_build_config_prefers_a_trimmed_ambient_eval(tmp_path):
+    """The full-length ambient eval is a multi-GB single allocation."""
+    from wakeword.steps import s04_train
+    from wakeword.steps.s02_datasets import TRIMMED_EVAL_DIRNAME
+
+    cfg = load(CONFIG, work_dir=str(tmp_path))
+
+    built = s04_train.build_config(cfg, log=lambda *a: None)
+    eval_entry = [f for f in built["features"] if f["sampling_weight"] == 0.0][0]
+    assert Path(eval_entry["features_dir"]).name == "dinner_party_eval"
+
+    trimmed = cfg.negative_datasets / TRIMMED_EVAL_DIRNAME / "validation_ambient" / "x_mmap"
+    trimmed.mkdir(parents=True)
+    built = s04_train.build_config(cfg, log=lambda *a: None)
+    eval_entry = [f for f in built["features"] if f["sampling_weight"] == 0.0][0]
+    assert Path(eval_entry["features_dir"]).name == TRIMMED_EVAL_DIRNAME
+    # Still held out of training regardless of which copy is used.
+    assert eval_entry["sampling_weight"] == 0.0
+    assert eval_entry["truncation_strategy"] == "split"
+
+
+def test_reduced_config_caps_the_ambient_eval():
+    """The reduced config must stay inside a 12 GB runtime."""
+    reduced = str(Path(__file__).resolve().parents[1] / "config" / "fbi_guy_reduced.yaml")
+    cfg = load(reduced, work_dir="/tmp/x")
+    cap = cfg.datasets.get("ambient_eval_max_frames")
+    assert cap and cap <= 1_000_000, "ambient eval cap missing or too large for 12 GB"
+    assert cfg.training["negative_sets"] == ["dinner_party"]
