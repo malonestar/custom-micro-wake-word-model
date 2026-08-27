@@ -54,6 +54,9 @@ write_state() {
 }
 warn() { printf '\033[33m    %s\033[0m\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+# Recoverable: report and hand the decision to the caller. Using die() inside a
+# function the supervisor calls would exit the supervisor itself.
+fail() { printf '\033[31m%s\033[0m\n' "$*" >&2; return 1; }
 
 command -v colab >/dev/null 2>&1 || die "the 'colab' CLI is not installed.
   Install it with:
@@ -184,9 +187,16 @@ cmd_setup() {
     say "Reusing existing session '$SESSION'"
   else
     say "Creating session '$SESSION' with a $GPU"
-    colab new -s "$SESSION" --gpu "$GPU"
+    # Checked explicitly rather than left to `set -e`: this function is called
+    # as `if ! cmd_setup`, and bash disables errexit inside a function used as
+    # a condition. Without this the run pressed on to upload into a session
+    # that was never created.
+    if ! colab new -s "$SESSION" --gpu "$GPU" 2>&1 | tail -25; then
+      return 1
+    fi
+    session_exists || return 1
   fi
-  colab status -s "$SESSION"
+  colab status -s "$SESSION" || return 1
 
   say "Confirming the GPU is visible inside the runtime"
   if ! remote_sh 60 'nvidia-smi --query-gpu=name,memory.total --format=csv,noheader'; then
@@ -227,7 +237,7 @@ cmd_setup() {
   fi
   retry_transfer "pipeline upload" \
     colab upload -s "$SESSION" "$bundle" /content/wakeword-pipeline.tar.gz \
-    || die "could not upload the pipeline after repeated attempts"
+    || fail "could not upload the pipeline after repeated attempts" || return 1
   local local_size
   local_size="$(stat -c%s "$bundle")"
   rm -rf "$(dirname "$bundle")"
@@ -235,7 +245,7 @@ cmd_setup() {
   # confusing tar error several commands later.
   remote_sh 60 "test -s /content/wakeword-pipeline.tar.gz && \
     [ \"\$(stat -c%s /content/wakeword-pipeline.tar.gz)\" = \"$local_size\" ]" \
-    || die "the uploaded bundle is missing or truncated on the runtime"
+    || fail "the uploaded bundle is missing or truncated on the runtime" || return 1
 
   remote_sh 120 "rm -rf $REMOTE_ROOT && mkdir -p $REMOTE_ROOT && \
     tar -xzf /content/wakeword-pipeline.tar.gz -C $REMOTE_ROOT && \
@@ -247,7 +257,7 @@ cmd_setup() {
   # silently-failed bootstrap is how the last attempt got to 'Setup complete'
   # with a broken venv.
   remote_sh 3000 "cd $REMOTE_ROOT/pipeline && ./bootstrap.sh" \
-    || die "bootstrap failed — see the output above"
+    || fail "bootstrap failed — see the output above" || return 1
 
   if [ -d "$LOCAL_ARCHIVE" ] && [ -n "$(find "$LOCAL_ARCHIVE" -type f 2>/dev/null)" ]; then
     say "Restoring the local archive onto this runtime (resume)"
@@ -336,7 +346,7 @@ cmd_supervise() {
   local interval="${WAKEWORD_SYNC_INTERVAL:-300}"
   local auto="${WAKEWORD_AUTO_RESUME:-1}"   # 0 = stop on session loss instead of re-provisioning
   local resumes=0 max_resumes="${WAKEWORD_MAX_RESUMES:-40}"
-  local stalled=0 last_sig=""
+  local stalled=0 last_sig="" backoff=0
   say "Supervising (sync ${interval}s, auto-resume=${auto}) until the run finishes"
   mkdir -p "$LOCAL_ARCHIVE"
 
@@ -355,9 +365,16 @@ cmd_supervise() {
       fi
       warn "Session gone (resume #$resumes/$max_resumes). Re-provisioning..."
       if ! cmd_setup; then
-        warn "setup failed; retrying in ${interval}s"
-        sleep "$interval"; continue
+        # A just-reclaimed session leaves its assignment held for up to ~90
+        # minutes, and Colab refuses a new one until it clears
+        # (TooManyAssignmentsError). Escalate the wait rather than retrying
+        # into the same refusal every few minutes.
+        backoff=$(( backoff < interval ? interval : backoff * 2 ))
+        [ "$backoff" -gt 900 ] && backoff=900
+        warn "setup failed; waiting ${backoff}s before the next attempt"
+        sleep "$backoff"; continue
       fi
+      backoff=0
       if ! cmd_start; then
         warn "start failed; retrying in ${interval}s"
         sleep "$interval"; continue
