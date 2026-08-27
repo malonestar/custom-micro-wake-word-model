@@ -41,7 +41,13 @@ source "$HERE/env.sh"
 export WAKEWORD_WORK_DIR
 mkdir -p "$WAKEWORD_WORK_DIR"
 
-PYTHON="$WAKEWORD_VENV/bin/python"
+# bootstrap.sh omits WAKEWORD_VENV on Colab, where deps live in the runtime
+# Python and there is no venv to point at.
+if [ -n "${WAKEWORD_VENV:-}" ]; then
+  PYTHON="$WAKEWORD_VENV/bin/python"
+else
+  PYTHON="$(command -v python3)"
+fi
 CMD=("$PYTHON" -m wakeword.run --config "$CONFIG" --work-dir "$WAKEWORD_WORK_DIR")
 [ ${#EXTRA[@]} -gt 0 ] && CMD+=("${EXTRA[@]}")
 

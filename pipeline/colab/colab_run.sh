@@ -4,20 +4,25 @@
 #
 #  Colab gives you a free T4 but takes the machine away on its own schedule, so
 #  this leans on two things: the CLI's keep-alive daemon (which holds the
-#  runtime with no browser tab open), and the pipeline's archive support (which
-#  mirrors each finished step to your Drive so the next session resumes instead
-#  of restarting).
+#  runtime with no browser tab open), and the pipeline's archive support — each
+#  finished step is tarred on the runtime and pulled down to this machine, so a
+#  reclaimed runtime costs one step rather than the whole run. (Google Drive is
+#  deliberately not used: `colab drivemount` needs an interactive browser grant
+#  every session.)
 #
 #    ./colab/colab_run.sh setup      create the runtime and install everything
 #    ./colab/colab_run.sh preview    generate sample clips and fetch them here
 #    ./colab/colab_run.sh start      launch the pipeline, detached
+#    ./colab/colab_run.sh supervise  keep-alive loop: pull the archive down as
+#                                    steps finish, fetch artifacts at the end
+#    ./colab/colab_run.sh sync       pull the runtime archive down once, now
 #    ./colab/colab_run.sh status     how far along it is
 #    ./colab/colab_run.sh log        last 40 lines of the run log
 #    ./colab/colab_run.sh fetch      download the finished .tflite + manifest
 #    ./colab/colab_run.sh stop       release the runtime
 #
-#  When a session dies, run `setup` then `start` again. The archive on Drive
-#  carries the completed steps across.
+#  When a session dies, run `setup` then `start` again. Setup pushes the local
+#  archive back onto the fresh runtime and the pipeline resumes from it.
 # =============================================================================
 set -euo pipefail
 
@@ -31,7 +36,11 @@ CONFIG="${WAKEWORD_CONFIG:-config/fbi_guy.yaml}"
 
 REMOTE_ROOT="/content/wakeword"
 REMOTE_WORK="/content/work"
-DRIVE_ARCHIVE="/content/drive/MyDrive/wakeword-archive"
+# The archive lives on the runtime while a session is alive, and is mirrored to
+# the local machine so it survives the runtime being reclaimed. Drive is not
+# used: colab drivemount needs an interactive browser grant every session.
+REMOTE_ARCHIVE="/content/archive"
+LOCAL_ARCHIVE="${WAKEWORD_LOCAL_ARCHIVE:-$PIPELINE/archive}"
 
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m    %s\033[0m\n' "$*"; }
@@ -85,6 +94,50 @@ session_exists() {
   colab sessions 2>/dev/null | grep -q "\[$SESSION\]"
 }
 
+# Newline-separated list of files under a remote directory (recursive).
+remote_find() {
+  remote_sh 120 "find '$1' -type f 2>/dev/null" || true
+}
+
+# Pull every file under REMOTE_ARCHIVE down to LOCAL_ARCHIVE, preserving the
+# relative layout. Skips files already present with the same size, so calling
+# this on a loop only moves what is new.
+sync_archive_down() {
+  local files
+  files="$(remote_find "$REMOTE_ARCHIVE")"
+  [ -n "$files" ] || { echo "  (nothing in the remote archive yet)"; return 0; }
+  while read -r rf; do
+    [ -n "$rf" ] || continue
+    local rel="${rf#$REMOTE_ARCHIVE/}"
+    local lf="$LOCAL_ARCHIVE/$rel"
+    local rsize lsize
+    rsize="$(remote_sh 60 "stat -c%s '$rf' 2>/dev/null" || echo 0)"
+    lsize="$( [ -f "$lf" ] && stat -c%s "$lf" 2>/dev/null || echo 0 )"
+    if [ "$rsize" = "$lsize" ] && [ "$rsize" != 0 ]; then
+      continue
+    fi
+    mkdir -p "$(dirname "$lf")"
+    echo "  down: $rel ($(numfmt --to=iec "$rsize" 2>/dev/null || echo "$rsize B"))"
+    colab download -s "$SESSION" "$rf" "$lf"
+  done <<< "$files"
+}
+
+# Push a previously-mirrored local archive back onto a fresh runtime, so the
+# pipeline's own restore step finds it and skips the completed work.
+sync_archive_up() {
+  [ -d "$LOCAL_ARCHIVE" ] || return 0
+  local any=0
+  while read -r lf; do
+    [ -n "$lf" ] || continue
+    any=1
+    local rel="${lf#$LOCAL_ARCHIVE/}"
+    echo "  up: $rel"
+    remote_sh 60 "mkdir -p '$(dirname "$REMOTE_ARCHIVE/$rel")'"
+    colab upload -s "$SESSION" "$lf" "$REMOTE_ARCHIVE/$rel"
+  done <<< "$(find "$LOCAL_ARCHIVE" -type f 2>/dev/null)"
+  [ "$any" = 1 ] && echo "  local archive restored to the runtime" || true
+}
+
 # --- commands ----------------------------------------------------------------
 cmd_setup() {
   if session_exists; then
@@ -111,10 +164,6 @@ cmd_setup() {
   warn "If 'Avail' above is below ~60 GB, lower positives.max_samples and"
   warn "datasets.audioset_clips in your config before starting."
 
-  say "Mounting Google Drive (for the archive that survives this runtime)"
-  colab drivemount -s "$SESSION" || die "drivemount failed — the archive is what
-  makes a lost session recoverable, so this is worth fixing before continuing."
-
   say "Uploading the pipeline"
   local bundle
   bundle="$(mktemp -d)/wakeword-pipeline.tar.gz"
@@ -131,9 +180,17 @@ cmd_setup() {
     chmod +x $REMOTE_ROOT/pipeline/*.sh"
 
   say "Running bootstrap (installs microWakeWord, Piper, dependencies)"
-  warn "This takes several minutes. It is safe to re-run."
-  remote_sh 2400 "cd $REMOTE_ROOT/pipeline && ./bootstrap.sh 2>&1 | tail -40" \
+  warn "Several minutes. Safe to re-run."
+  # No pipe here: piping through tail would mask bootstrap's exit status, and a
+  # silently-failed bootstrap is how the last attempt got to 'Setup complete'
+  # with a broken venv.
+  remote_sh 3000 "cd $REMOTE_ROOT/pipeline && ./bootstrap.sh" \
     || die "bootstrap failed — see the output above"
+
+  if [ -d "$LOCAL_ARCHIVE" ] && [ -n "$(find "$LOCAL_ARCHIVE" -type f 2>/dev/null)" ]; then
+    say "Restoring the local archive onto this runtime (resume)"
+    sync_archive_up
+  fi
 
   say "Setup complete. Next:  $0 preview"
 }
@@ -168,23 +225,58 @@ cmd_start() {
   # on your machine is what holds the runtime, not anything running inside it.
   remote_sh 300 "cd $REMOTE_ROOT/pipeline && \
     WAKEWORD_WORK_DIR=$REMOTE_WORK \
-    WAKEWORD_ARCHIVE_DIR=$DRIVE_ARCHIVE \
+    WAKEWORD_ARCHIVE_DIR=$REMOTE_ARCHIVE \
     ./run.sh $CONFIG --detach"
 
-  say "Running. You can close this terminal."
+  say "Running detached on the runtime."
   cat <<EOF
 
+  supervise  $0 supervise    (keep-alive + pull the archive down as steps finish)
   progress   $0 status
   live log   $0 log
-  artifacts  $0 fetch      (once it finishes)
+  sync now   $0 sync
+  artifacts  $0 fetch        (once it finishes)
 
-Each completed step is mirrored to your Drive at:
-  $DRIVE_ARCHIVE
-
-If Colab takes the runtime away before it finishes, run:
-  $0 setup && $0 start
-and it will restore from that archive rather than starting over.
+Completed steps are archived on the runtime at $REMOTE_ARCHIVE and pulled to
+  $LOCAL_ARCHIVE
+by '$0 sync' (or continuously by '$0 supervise'). If Colab reclaims the
+runtime, run '$0 setup && $0 start' — setup pushes the local archive back and
+the pipeline resumes from it.
 EOF
+}
+
+cmd_sync() {
+  session_exists || die "no session '$SESSION' to sync from"
+  mkdir -p "$LOCAL_ARCHIVE"
+  say "Pulling the runtime archive down to $LOCAL_ARCHIVE"
+  sync_archive_down
+}
+
+cmd_supervise() {
+  session_exists || die "no session '$SESSION' — run '$0 setup && $0 start' first"
+  local interval="${WAKEWORD_SYNC_INTERVAL:-300}"
+  say "Supervising: sync every ${interval}s until the run finishes or the session is lost"
+  mkdir -p "$LOCAL_ARCHIVE"
+  while true; do
+    if ! session_exists; then
+      warn "Session '$SESSION' is gone. What is in $LOCAL_ARCHIVE is what survived."
+      warn "Resume with:  $0 setup && $0 start && $0 supervise"
+      return 1
+    fi
+    sync_archive_down
+    local tail_log
+    tail_log="$(remote_sh 60 "tail -3 $REMOTE_WORK/run.log 2>/dev/null" || true)"
+    printf '%s\n' "$tail_log" | sed 's/^/  log: /'
+    if printf '%s' "$tail_log" | grep -q "Pipeline complete"; then
+      say "Run finished. Fetching artifacts."
+      cmd_fetch
+      return 0
+    fi
+    if printf '%s' "$tail_log" | grep -q "^\[fail\]"; then
+      die "the pipeline reported a failure — see '$0 log'"
+    fi
+    sleep "$interval"
+  done
 }
 
 cmd_status() {
@@ -219,7 +311,8 @@ cmd_fetch() {
 cmd_stop() {
   say "Stopping session '$SESSION'"
   colab stop -s "$SESSION"
-  warn "The Drive archive is untouched — '$0 setup && $0 start' resumes from it."
+  warn "The local archive at $LOCAL_ARCHIVE is untouched —"
+  warn "'$0 setup && $0 start' pushes it back and resumes from it."
 }
 
 # Sourcing this file gets the helpers without dispatching, which is how the
@@ -229,13 +322,15 @@ if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
 fi
 
 case "${1:-}" in
-  setup)   cmd_setup ;;
-  preview) cmd_preview ;;
-  start)   cmd_start ;;
-  status)  cmd_status ;;
-  log)     cmd_log ;;
-  fetch)   cmd_fetch ;;
-  stop)    cmd_stop ;;
+  setup)     cmd_setup ;;
+  preview)   cmd_preview ;;
+  start)     cmd_start ;;
+  supervise) cmd_supervise ;;
+  sync)      cmd_sync ;;
+  status)    cmd_status ;;
+  log)       cmd_log ;;
+  fetch)     cmd_fetch ;;
+  stop)      cmd_stop ;;
   *)
     sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 1
