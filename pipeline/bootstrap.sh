@@ -61,13 +61,15 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$ON_COLAB" = 1 ]; then
   say "Upgrading build tooling in the runtime Python"
-  "${PIP[@]}" install -q --upgrade pip setuptools wheel cython
+  "${PIP[@]}" install -q --upgrade pip wheel cython
+  "${PIP[@]}" install -q --upgrade 'setuptools<81'   # keeps pkg_resources available
 else
   say "Python virtualenv at $VENV"
   [ -d "$VENV" ] || python3 -m venv "$VENV"
   # shellcheck disable=SC1091
   source "$VENV/bin/activate"
-  pip install -q --upgrade pip setuptools wheel cython
+  pip install -q --upgrade pip wheel cython
+  pip install -q --upgrade 'setuptools<81'   # keeps pkg_resources available
 fi
 
 # ---------------------------------------------------------------------------
@@ -125,6 +127,10 @@ say "Pipeline dependencies"
 # on it being importable.
 "${PIP_INSTALL[@]}" torchcodec
 "$PYTHON" -c "import torchcodec, datasets; print('  torchcodec', torchcodec.__version__, '| datasets', datasets.__version__)"
+# Re-assert the pin: several packages above will happily pull setuptools>=81
+# back in as a transitive dependency.
+"${PIP[@]}" install -q --upgrade 'setuptools<81'
+"$PYTHON" -c "import pkg_resources, setuptools; print('  setuptools', setuptools.__version__, '| pkg_resources OK')"
 # microWakeWord's Augmentation hardcodes audiomentations.AddColorNoise (added
 # in 0.35.0) and .GainTransition. Colab preinstalls an older one and a plain
 # install will not replace a satisfied requirement, so upgrade it explicitly.

@@ -128,6 +128,11 @@ def run(cfg, log=print) -> None:
     _check("datasets can handle audio (torchcodec usable, checked out-of-process)",
            _audio_backend, log)
 
+    def _pkg_resources():
+        import pkg_resources  # noqa: F401 — setuptools>=81 drops it; the audio
+        return True           # stack still imports it at runtime
+    _check("pkg_resources available (setuptools < 81)", _pkg_resources, log)
+
     log("\n2/8 TTS")
     model = _check("piper voice model present",
                    lambda: s01_samples.ensure_model(cfg, log=lambda *a: None), log)
