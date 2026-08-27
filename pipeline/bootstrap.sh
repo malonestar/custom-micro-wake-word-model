@@ -119,6 +119,12 @@ say "Pipeline dependencies"
 "${PIP_INSTALL[@]}" \
   pyyaml tqdm numpy scipy librosa soundfile fsspec \
   datasets mmap_ninja tensorboard
+# datasets >= 4 routes all audio through torchcodec, including when a column is
+# cast with decode=False — iterating any audio dataset raises ImportError
+# without it. We decode with soundfile ourselves, but the library still insists
+# on it being importable.
+"${PIP_INSTALL[@]}" torchcodec
+"$PYTHON" -c "import torchcodec, datasets; print('  torchcodec', torchcodec.__version__, '| datasets', datasets.__version__)"
 # microWakeWord's Augmentation hardcodes audiomentations.AddColorNoise (added
 # in 0.35.0) and .GainTransition. Colab preinstalls an older one and a plain
 # install will not replace a satisfied requirement, so upgrade it explicitly.

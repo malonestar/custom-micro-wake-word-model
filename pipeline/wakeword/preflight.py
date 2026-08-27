@@ -52,7 +52,7 @@ def _versions(log) -> None:
     """Record what is actually installed. Most failures here are version skew."""
     import importlib
     for mod in ("tensorflow", "audiomentations", "datasets", "librosa",
-                "soundfile", "numpy", "scipy", "mmap_ninja"):
+                "soundfile", "numpy", "scipy", "mmap_ninja", "torchcodec"):
         try:
             m = importlib.import_module(mod)
             log(f"    {mod:16s} {getattr(m, '__version__', '?')}")
@@ -104,6 +104,12 @@ def run(cfg, log=print) -> None:
     log("\n1/8 library APIs")
     _check("audiomentations has every transform microWakeWord names",
            lambda: _augmentation_api(cfg, log), log)
+
+    def _audio_backend():
+        import datasets  # noqa: F401
+        import torchcodec  # noqa: F401  — datasets>=4 requires it to touch audio
+        return True
+    _check("datasets can handle audio (torchcodec importable)", _audio_backend, log)
 
     log("\n2/8 TTS")
     model = _check("piper voice model present",

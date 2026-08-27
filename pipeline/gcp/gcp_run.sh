@@ -164,6 +164,8 @@ cmd_watch() {
 
     local st; st="$(remote_state)"
     printf '[%3d min] %s | %s\n' "$elapsed" "$status" "$(printf '%s' "$st" | head -1 || echo booting)"
+    { printf 'elapsed_min=%s\nvm_status=%s\n' "$elapsed" "$status"
+      printf '%s\n' "$st"; } > "$PIPELINE/gcp_watch_state" 2>/dev/null || true
     case "$(printf '%s' "$st" | head -1)" in
       complete) say "run complete"; cmd_fetch; exit 0 ;;
       failed)   say "terminal failure"; printf '%s\n' "$st"; exit 3 ;;
