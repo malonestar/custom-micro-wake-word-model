@@ -22,12 +22,15 @@ mk_env() {
   local d="$T/$1"; rm -rf "$d"; mkdir -p "$d/bin" "$d/work" "$d/repo/pipeline/gcp"
   cat > "$d/bin/sudo" <<'S'
 #!/usr/bin/env bash
-[ "$1" = "shutdown" ] && { echo "SHUTDOWN_CALLED" >> "$SHUTDOWN_LOG"; exit 0; }
+# Pass through so the shutdown stub sees its real arguments; the test needs to
+# distinguish a scheduled `shutdown -h +N` from a backgrounded sleep.
 exec "$@"
 S
   cat > "$d/bin/shutdown" <<'S'
 #!/usr/bin/env bash
-echo "SHUTDOWN_CALLED" >> "$SHUTDOWN_LOG"; exit 0
+# Records the request and returns immediately, the way a real scheduled
+# shutdown does — it must not depend on this process staying alive.
+echo "SHUTDOWN_CALLED $*" >> "$SHUTDOWN_LOG"; exit 0
 S
   printf '#!/usr/bin/env bash\nexit 1\n' > "$d/bin/nvidia-smi"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/gcloud"
@@ -59,6 +62,11 @@ sleep "${FLUSH_WAIT:-22}"   # power_off delays the call so logs can flush
 check "success: exits 0" "0" "$rc"
 check "success: state is complete" "complete" "$(head -1 "$d/work/vm_state" 2>/dev/null)"
 check "success: powers off" "yes" "$([ -s "$d/shutdown.log" ] && echo yes || echo no)"
+# Regression: the request must be a scheduled shutdown, not a backgrounded
+# sleep. A sleep lives in the service cgroup and is killed when the main
+# process exits, so the machine logs "SHUTTING DOWN" and then keeps billing.
+check "success: schedules shutdown (survives process exit)" "yes" \
+  "$(grep -q 'SHUTDOWN_CALLED -h' "$d/shutdown.log" 2>/dev/null && echo yes || echo no)"
 
 # --- 2. a broken preflight powers off without burning hours ------------------
 d="$(mk_env preflight_fail)"

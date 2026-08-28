@@ -60,8 +60,17 @@ power_off() {
   fi
   say "SHUTTING DOWN: $reason"
   sync
-  # Delayed so this script can exit and the log can flush before power is cut.
-  ( sleep "${WAKEWORD_SHUTDOWN_DELAY:-20}"; sudo shutdown -h now ) &
+  # `shutdown -h +1` hands the request to systemd, which owns it independently
+  # of this process. A backgrounded `( sleep N; shutdown -h now ) &` does NOT
+  # survive: it stays in the service's cgroup, and systemd kills the whole
+  # cgroup the moment the main process exits — so the sleep dies before it ever
+  # fires. That is exactly what happened on the successful run, which logged
+  # "SHUTTING DOWN: run complete" and then stayed up billing.
+  local delay_min="${WAKEWORD_SHUTDOWN_DELAY_MIN:-1}"
+  if ! sudo shutdown -h "+${delay_min}" "wakeword pipeline: $reason" 2>/dev/null; then
+    # Fall back to a detached poweroff if `shutdown` is unavailable.
+    setsid sudo systemctl poweroff --no-block 2>/dev/null || sudo poweroff -f 2>/dev/null &
+  fi
 }
 
 # Record the interruption but do NOT power off. systemd sends SIGTERM on every

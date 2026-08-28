@@ -1,5 +1,5 @@
-elapsed_min=3
+elapsed_min=307
 vm_status=RUNNING
-failed
-2026-08-28T01:25:30+00:00
-failed 3 times (last rc=127) — needs a code fix
+complete
+2026-08-28T07:30:37+00:00
+/mnt/work/output/fbi_guy_v1.tflite

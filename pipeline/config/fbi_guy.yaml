@@ -175,6 +175,14 @@ training:
   # optimizing recall. 0.4 = at most one spurious wake roughly every 2.5 hours.
   target_false_accepts_per_hour: 0.4
 
+  # Stop after this many evaluations with no improvement. The trainer already
+  # keeps the best weights, so an early stop costs nothing but saves the tail
+  # of a plateaued run — on v1 the last ~20k steps took four hours and produced
+  # no better model. Generous on purpose: the metric is noisy enough that a
+  # short patience would stop on a lucky dip. At eval_step_interval=500,
+  # 30 evaluations is 15,000 steps of no progress. Set 0 to disable.
+  early_stop_patience: 30
+
 # ---- Dataset sizes ----------------------------------------------------------
 datasets:
   # Ambient background clips pulled from AudioSet. The full balanced set is

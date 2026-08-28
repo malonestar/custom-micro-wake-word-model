@@ -129,6 +129,9 @@ def build_config(cfg, log=print) -> dict:
         "eval_step_interval": int(t.get("eval_step_interval", 500)),
         "clip_duration_ms": int(t.get("clip_duration_ms", 1500)),
         "target_minimization": float(t.get("target_false_accepts_per_hour", 0.4)),
+        # Stop when the metric stops improving. The trainer keeps best_weights,
+        # so this saves compute without costing quality. 0 disables it.
+        "early_stop_patience": int(t.get("early_stop_patience", 30)),
         "minimization_metric": "ambient_false_positives_per_hour",
         "maximization_metric": "average_viable_recall",
     }

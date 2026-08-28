@@ -291,3 +291,19 @@ def test_reduced_config_caps_the_ambient_eval():
     cap = cfg.datasets.get("ambient_eval_max_frames")
     assert cap and cap <= 1_000_000, "ambient eval cap missing or too large for 12 GB"
     assert cfg.training["negative_sets"] == ["dinner_party"]
+
+
+def test_early_stop_patience_is_passed_to_the_trainer(tmp_path):
+    """A plateaued run should stop; best_weights means it costs no quality."""
+    from wakeword.steps import s04_train
+
+    cfg = load(CONFIG, work_dir=str(tmp_path))
+    built = s04_train.build_config(cfg, log=lambda *a: None)
+    assert built["early_stop_patience"] > 0
+    # Patience is counted in evaluations. It must be long enough that the very
+    # noisy false-accept metric (adjacent evals have swung 1.1 -> 13.0 -> 9.1)
+    # cannot trip it on a single unlucky stretch.
+    assert built["early_stop_patience"] >= 20
+
+    cfg.training["early_stop_patience"] = 0  # explicit opt-out
+    assert s04_train.build_config(cfg, log=lambda *a: None)["early_stop_patience"] == 0
