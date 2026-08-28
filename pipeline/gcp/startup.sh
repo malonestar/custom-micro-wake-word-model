@@ -23,6 +23,13 @@ WORK=/mnt/work
 INSTALL=/opt/wakeword
 mkdir -p "$WORK" "$INSTALL"
 
+# Stop the service before touching the source tree. On a VM restored from a
+# snapshot the unit is already enabled, so systemd starts the pipeline at boot
+# at the same moment this script runs — and the code refresh below then deletes
+# run.sh out from under the running process ("./run.sh: No such file or
+# directory", rc=127). Refresh first, start second.
+systemctl stop wakeword.service 2>/dev/null || true
+
 # --- NVIDIA driver (Deep Learning VM images ship a helper) -------------------
 if ! nvidia-smi >/dev/null 2>&1; then
   echo "installing NVIDIA driver"
@@ -90,6 +97,18 @@ WantedBy=multi-user.target
 UNIT
 
 chmod +x "$INSTALL/custom-micro-wake-word-model/pipeline/gcp/vm_pipeline.sh"
+chmod +x "$INSTALL/custom-micro-wake-word-model/pipeline"/*.sh 2>/dev/null || true
+
+# Sanity-check the tree before handing it to systemd: a truncated or
+# mis-shaped bundle should fail here, loudly, not as rc=127 three attempts in.
+for required in pipeline/run.sh pipeline/bootstrap.sh pipeline/gcp/vm_pipeline.sh; do
+  if [ ! -x "$INSTALL/custom-micro-wake-word-model/$required" ]; then
+    echo "FATAL: $required missing or not executable after install"
+    exit 1
+  fi
+done
+echo "code tree verified"
+
 systemctl daemon-reload
 systemctl enable --now wakeword.service
 echo "=== startup complete; wakeword.service running ==="

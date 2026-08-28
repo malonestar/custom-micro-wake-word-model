@@ -1,3 +1,5 @@
-waiting
-2026-08-27T19:12:04-06:00
-no T4 capacity in us-east1-c; attempt 30
+elapsed_min=3
+vm_status=RUNNING
+failed
+2026-08-28T01:25:30+00:00
+failed 3 times (last rc=127) — needs a code fix
