@@ -249,6 +249,20 @@ def train(model, config, data_processor):
 
     best_minimization_quantity = 10000
     best_maximization_quantity = 0.0
+
+    # ---- early stopping -----------------------------------------------------
+    # The metric plateaus long before the step budget runs out. On the "FBI guy"
+    # run the best weights were found around step 20-25k and never beaten, so
+    # the remaining ~20k steps cost four hours and produced nothing. Since the
+    # trainer already keeps best_weights, stopping early costs no quality — only
+    # the wasted compute is saved.
+    #
+    # Patience is counted in evaluations, not steps, and is deliberately
+    # generous: this metric is very noisy (adjacent evals have swung 1.1 -> 13.0
+    # -> 9.1), so a short patience would stop on a lucky dip.
+    early_stop_patience = int(config.get("early_stop_patience", 0) or 0)
+    evals_since_improvement = 0
+    stop_early = False
     best_no_faph_cutoff = 1.0
 
     for training_step in range(1, training_steps_max + 1):
@@ -448,6 +462,7 @@ def train(model, config, data_processor):
                 best_minimization_quantity = current_minimization_quantity
                 best_maximization_quantity = current_maximization_quantity
                 best_no_faph_cutoff = current_no_faph_cutoff
+                evals_since_improvement = 0
 
                 # overwrite the best model weights
                 model.save_weights(
@@ -455,12 +470,30 @@ def train(model, config, data_processor):
                 )
                 checkpoint.save(file_prefix=checkpoint_prefix)
 
+            else:
+                evals_since_improvement += 1
+
             logging.info(
                 "So far the best minimization quantity is %.3f with best maximization quantity of %.5f%%; no faph cutoff is %.2f",
                 best_minimization_quantity,
                 (best_maximization_quantity * 100),
                 best_no_faph_cutoff,
             )
+
+            if early_stop_patience and evals_since_improvement >= early_stop_patience:
+                logging.info(
+                    "EARLY STOP at step %d: no improvement in %d evaluations "
+                    "(patience %d). best_weights is already saved, so this "
+                    "costs no quality.",
+                    training_step,
+                    evals_since_improvement,
+                    early_stop_patience,
+                )
+                stop_early = True
+                break
+
+        if stop_early:
+            break
 
     # Save checkpoint after training
     checkpoint.save(file_prefix=checkpoint_prefix)

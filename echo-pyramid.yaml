@@ -31,6 +31,7 @@ substitutions:
   hey_m5_v1_model_file: models/hey_m5_v1.json
   hey_m5_v3_model_file: models/hey_m5_v3.json
   hey_stackchan_v1_model_file: models/hey_stackchan_v1.json
+  fbi_guy_v1_model_file: models/fbi_guy_v1.json
 
   # Background colors
   loading_illustration_background_color: '000000'
@@ -432,7 +433,11 @@ select:
       # Sets specific wake word probabilities computed for each particular model
       # Note probability cutoffs are set as a quantized uint8 value, each comment has the corresponding floating point cutoff
       # False Accepts per Hour values are tested against all units and channels from the Dinner Party Corpus.
-      # These cutoffs apply only to the specific models included in the firmware: hey_frank_v3, hey_frank_v5, hey_m5_v1
+      # These cutoffs apply only to the specific models included in the firmware.
+      # fbi_guy_v1 is flatter than the others: it cannot be both quiet and
+      # accurate, so "Slightly sensitive" costs it a lot of recall. Start on
+      # "Very sensitive" (0.80 -> 87% recall at 0.75 FA/hr) and move up only
+      # if it is too chatty.
       lambda: |-
         if (x == "Slightly sensitive") {
           id(hey_frank_v3).set_probability_cutoff(237);      // v3: 0.93 -> 0.187 FAPH
@@ -440,18 +445,21 @@ select:
           id(hey_m5_v1).set_probability_cutoff(84);          // v1: 0.33 -> 0.187 FAPH
           id(hey_m5_v3).set_probability_cutoff(110);         // v3: 0.43 -> 0.187 FAPH
           id(hey_stackchan_v1).set_probability_cutoff(207);  // v1: 0.81 -> 0.187 FAPH
+          id(fbi_guy_v1).set_probability_cutoff(251);        // v1: 0.985 -> ~0.19 FAPH (only ~57% recall)
         } else if (x == "Moderately sensitive") {
           id(hey_frank_v3).set_probability_cutoff(230);      // v3: 0.90 -> 0.562 FAPH
           id(hey_frank_v5).set_probability_cutoff(191);      // v5: 0.75 -> 0.375 FAPH
           id(hey_m5_v1).set_probability_cutoff(46);          // v1: 0.18 -> 0.375 FAPH
           id(hey_m5_v3).set_probability_cutoff(74);          // v3: 0.29 -> 0.375 FAPH
           id(hey_stackchan_v1).set_probability_cutoff(194);  // v1: 0.76 -> 0.375 FAPH
+          id(fbi_guy_v1).set_probability_cutoff(235);        // v1: 0.92 -> 0.562 FAPH, 77% recall
         } else if (x == "Very sensitive") {
           id(hey_frank_v3).set_probability_cutoff(145);      // v3: 0.57 -> 0.937 FAPH
           id(hey_frank_v5).set_probability_cutoff(145);      // v5: 0.57 -> 0.937 FAPH
           id(hey_m5_v1).set_probability_cutoff(26);          // v1: 0.10 -> 1.125 FAPH
           id(hey_m5_v3).set_probability_cutoff(18);          // v3: 0.07 -> 0.750 FAPH
           id(hey_stackchan_v1).set_probability_cutoff(133);  // v1: 0.52 -> 0.750 FAPH
+          id(fbi_guy_v1).set_probability_cutoff(204);        // v1: 0.80 -> 0.750 FAPH, 87% recall
         }
 
 micro_wake_word:
@@ -468,6 +476,8 @@ micro_wake_word:
       id: hey_m5_v3
     - model: ${hey_stackchan_v1_model_file}
       id: hey_stackchan_v1
+    - model: ${fbi_guy_v1_model_file}
+      id: fbi_guy_v1
   vad:
   on_wake_word_detected:
     # Wake display if sleeping before doing anything visible

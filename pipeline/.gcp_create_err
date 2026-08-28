@@ -1,0 +1,4 @@
+Created [https://www.googleapis.com/compute/v1/projects/gen-lang-client-0502362419/zones/us-east1-c/instances/wakeword-trainer].
+WARNING: Some requests generated warnings:
+ - Disk size: '200 GB' is larger than image size: '50 GB'. You might need to resize the root repartition manually if the operating system does not support automatic resizing. See https://cloud.google.com/compute/docs/disks/add-persistent-disk#resize_pd for details.
+

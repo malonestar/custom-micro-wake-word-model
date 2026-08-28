@@ -1,0 +1,227 @@
+# ============================================================================
+#  Wake word pipeline configuration — "FBI guy" — REDUCED
+#  Smaller everything so a run fits inside a short free-Colab session.
+#  Same pronunciation and confusable set as fbi_guy.yaml; fewer of each,
+#  fewer training steps. Expect worse false-accept numbers than the full
+#  config — usable, not optimal. Use fbi_guy.yaml on a machine that will
+#  not be reclaimed (a GCP VM).
+# ============================================================================
+#  This is the ONLY file you need to edit. Everything downstream reads from it.
+#  To train a different wake word, copy this file and change the `wake_word`
+#  and `confusables` blocks.
+# ============================================================================
+
+wake_word:
+  # Human-readable label shown in Home Assistant / ESPHome.
+  label: "FBI guy"
+
+  # Used for filenames and directory names. Lowercase, underscores only.
+  slug: "fbi_guy"          # same slug: this is still fbi_guy, just v-suffixed below
+
+  # Bumped for each retrain so you can A/B two models on the device.
+  version: 1               # -> fbi_guy_v1; bump for the full-scale retrain
+
+  # ---- Pronunciation -------------------------------------------------------
+  # Piper is fed IPA phonemes rather than plain text. Spelling out "FBI" as
+  # text makes Piper guess: some voices say "fibby", some spell it, some skip
+  # letters. Phonemes force all ~900 LibriTTS speakers to say the same thing.
+  #
+  #   ɛf = "eff"    biː = "bee"    aɪ = "eye"    ɡaɪ = "guy"
+  #
+  # Primary stress on "eff" and "eye" only; "bee" and "guy" ride along
+  # unstressed. Chosen by ear over ~20 candidates: stressing every element
+  # (or "bee"/"guy") made espeak append a schwa — "EFF-uh ... EYE-uh guy".
+  phonemes: "ˈɛf biː ˈaɪ ɡaɪ"
+
+  # Fallback if you ever want plain-text generation instead (set use_phonemes
+  # to false). Kept for reference and for the manifest.
+  text: "FBI guy"
+  use_phonemes: true
+
+# ---- Positive sample generation --------------------------------------------
+positives:
+  # Number of TTS clips of the wake word. 50k is the quality sweet spot.
+  # Drop to 25_000 if you are tight on disk.
+  max_samples: 12000
+
+  # Clips per GPU batch during generation. Lower to 128 on a <12 GB GPU.
+  batch_size: 256
+
+  # Piper sampling noise. Higher = more variation in timing and delivery.
+  noise_scale: 0.5
+  noise_scale_w: 0.6
+
+# ---- Confusable negatives ---------------------------------------------------
+#  Phrases that sound *close* to the wake word but must never trigger it.
+#  These are trained as high-penalty hard negatives and are the single biggest
+#  lever on false-accept behavior.
+#
+#  "FBI guy" has a distinctive vowel skeleton:  /ɛ/ - /iː/ - /aɪ/ - /ɡaɪ/
+#                                                eff   bee    eye    guy
+#
+#  The model does not really learn "F, then B, then I". It learns that vowel
+#  contour. So the dangerous neighbors are any three letters with the same
+#  contour, followed by "guy" — the consonants carry far less weight than the
+#  vowels do. The list below is built systematically:
+#
+#    - single-letter substitutions at each of the three positions, using other
+#      letters that share that position's vowel:
+#        /ɛ/  letters: F S L M N X        (eff, ess, ell, em, en, ex)
+#        /iː/ letters: B D G P T V C E Z  (bee, dee, gee, pee, tee, vee, cee...)
+#        /aɪ/ letters: I Y                (eye, why)
+#    - truncations: the acronym with no "guy", or "guy" with a letter missing
+#    - the /aɪ ... aɪ ɡaɪ/ tail on its own ("wifi guy", "sci fi guy")
+#
+#  Unrelated acronyms like "TV guy" or "CIA guy" are deliberately NOT here:
+#  their vowel contours (/iː iː/, /siː aɪ eɪ/) are far enough away that spending
+#  training capacity on them would dilute the near-miss cases that matter.
+#  Adding one back is a one-line edit if the device ever trips on it.
+#
+#  `phonemes` is given for every acronym phrase — plain text like "S T I guy"
+#  is a coin flip in TTS, which may spell it, slur it, or read it as a word.
+confusables:
+  samples_per_phrase: 350
+
+  phrases:
+    # -- position 1 substituted: /ɛ?/ + bee + eye + guy -----------------------
+    - text: "N B I guy"
+      phonemes: "ˈɛn biː ˈaɪ ɡaɪ"      # closest possible miss: F -> N
+    - text: "M B I guy"
+      phonemes: "ˈɛm biː ˈaɪ ɡaɪ"
+    - text: "S B I guy"
+      phonemes: "ˈɛs biː ˈaɪ ɡaɪ"
+    - text: "L B I guy"
+      phonemes: "ˈɛl biː ˈaɪ ɡaɪ"
+
+    # -- position 2 substituted: eff + /?iː/ + eye + guy ----------------------
+    - text: "F D I guy"
+      phonemes: "ˈɛf diː ˈaɪ ɡaɪ"
+    - text: "F G I guy"
+      phonemes: "ˈɛf dʒiː ˈaɪ ɡaɪ"
+    - text: "F T I guy"
+      phonemes: "ˈɛf tiː ˈaɪ ɡaɪ"
+    - text: "F P I guy"
+      phonemes: "ˈɛf piː ˈaɪ ɡaɪ"
+    - text: "F V I guy"
+      phonemes: "ˈɛf viː ˈaɪ ɡaɪ"
+
+    # -- position 3 substituted: eff + bee + /?/ + guy ------------------------
+    - text: "F B Y guy"
+      phonemes: "ˈɛf biː ˈwaɪ ɡaɪ"
+    - text: "F B E guy"
+      phonemes: "ˈɛf biː ˈiː ɡaɪ"
+
+    # -- two letters substituted: same contour, different acronym -------------
+    - text: "S T I guy"
+      phonemes: "ˈɛs tiː ˈaɪ ɡaɪ"
+    - text: "L G I guy"
+      phonemes: "ˈɛl dʒiː ˈaɪ ɡaɪ"
+    - text: "M P I guy"
+      phonemes: "ˈɛm piː ˈaɪ ɡaɪ"
+    - text: "N D I guy"
+      phonemes: "ˈɛn diː ˈaɪ ɡaɪ"
+    - text: "X C I guy"
+      phonemes: "ˈɛks siː ˈaɪ ɡaɪ"
+
+    # -- truncations and extensions -------------------------------------------
+    - text: "F B I"
+      phonemes: "ˈɛf biː ˈaɪ"           # acronym alone, no "guy"
+    - text: "B I guy"
+      phonemes: "ˈbiː ˈaɪ ɡaɪ"          # dropped the F
+    - text: "F B guy"
+      phonemes: "ˈɛf biː ɡaɪ"          # dropped the I
+    - text: "F B I agent"
+      phonemes: "ˈɛf biː ˈaɪ ˈeɪdʒənt"
+    - text: "F B I guide"
+      phonemes: "ˈɛf biː ˈaɪ ɡaɪd"     # trailing /d/ only
+
+    # -- the /aɪ ... aɪ ɡaɪ/ tail without the acronym --------------------------
+    - text: "wifi guy"
+    - text: "sci fi guy"
+
+# ---- Augmentation -----------------------------------------------------------
+#  How clips are roughed up before becoming training features. The goal is that
+#  a clip sounds like someone speaking across a room with a TV on — muffled is
+#  fine, unintelligible means you have gone too far.
+augmentation:
+  duration_s: 3.2
+  background_min_snr_db: -5      # toward 0 = cleaner, easier training data
+  background_max_snr_db: 20
+  min_jitter_s: 0.10             # random position of the phrase in the window
+  max_jitter_s: 0.50
+  probabilities:
+    AddBackgroundNoise: 0.85
+    RIR: 0.60                    # room reverb
+    Gain: 1.00
+    GainTransition: 0.25
+    AddColorNoise: 0.20
+    PitchShift: 0.15
+    SevenBandParametricEQ: 0.15
+    TanhDistortion: 0.10
+    BandStopFilter: 0.10
+
+# ---- Training ---------------------------------------------------------------
+training:
+  # One entry per phase. steps / learning_rates / class weights must be the
+  # same length. Use steps: [5000] for a quick end-to-end smoke test.
+  steps: [8000, 6000]
+  learning_rates: [0.001, 0.0001]
+  positive_class_weight: [2, 2]
+
+  # The main false-accept knob. Raise if the finished model triggers on ambient
+  # noise; lower if it is too deaf to fire when you actually speak.
+  negative_class_weight: [50, 60]
+
+  # RAM, not quality, picks this list. microWakeWord loads every feature set
+  # eagerly, and `speech` (350k samples) + `no_speech` (238k) OOM-kill the
+  # trainer on a 12 GB Colab runtime. dinner_party is the most valuable of the
+  # three anyway — multi-speaker conversation and TV noise are what actually
+  # cause false triggers in a living room. On a machine with ~30 GB (a GCP VM),
+  # drop this line to train against all three.
+  negative_sets: ["dinner_party"]
+
+  batch_size: 256                # drop to 128 on a GPU with under 12 GB
+  eval_step_interval: 500
+  clip_duration_ms: 1500
+
+  # The trainer must get ambient false accepts below this before it starts
+  # optimizing recall. 0.4 = at most one spurious wake roughly every 2.5 hours.
+  target_false_accepts_per_hour: 0.4
+
+  # Stop after this many evaluations with no improvement. The trainer already
+  # keeps the best weights, so an early stop costs nothing but saves the tail
+  # of a plateaued run — on v1 the last ~20k steps took four hours and produced
+  # no better model. Generous on purpose: the metric is noisy enough that a
+  # short patience would stop on a lucky dip. At eval_step_interval=500,
+  # 30 evaluations is 15,000 steps of no progress. Set 0 to disable.
+  early_stop_patience: 30
+
+# ---- Dataset sizes ----------------------------------------------------------
+datasets:
+  # Ambient background clips pulled from AudioSet. The full balanced set is
+  # 18683; lower it to shorten the download on a slow connection.
+  audioset_clips: 6000
+
+  # Cap the ambient false-accept eval recordings, per split, in 10 ms frames.
+  # microWakeWord slides a window over these and builds every window into one
+  # float32 array before scoring: the stock ~9.7 h validation set becomes
+  # 116,022 windows = 3.6 GB and OOM-kills the trainer on a 12 GB Colab
+  # runtime. 720,000 frames is 2 h per split, ~0.75 GB, which fits alongside
+  # TensorFlow. Fewer hours observed makes the FA/hr figure noisier, not wrong.
+  # Remove this on a machine with ~30 GB to score against the full set.
+  ambient_eval_max_frames: 720000
+
+# ---- ESPHome manifest -------------------------------------------------------
+manifest:
+  author: "trout1758"
+  website: "https://github.com/trout1758-cpu/custom-micro-wake-word-model"
+  trained_languages: ["en"]
+
+  # Detection threshold baked into the manifest, not the model — you can edit
+  # this in the .json afterwards without retraining. Higher = fewer false
+  # triggers, lower = easier to wake. Training prints a cutoff table; start
+  # from the value there for your desired false-accept rate.
+  probability_cutoff: 0.90
+  sliding_window_size: 5
+  tensor_arena_size: 30000
+  minimum_esphome_version: "2024.7.0"

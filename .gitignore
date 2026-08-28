@@ -1,0 +1,16 @@
+
+# Local run artifacts — the model is published to the bucket and archived
+# separately; these are byproducts of a run, not source.
+pipeline/archive_v1/
+pipeline/archive/
+pipeline/output/
+pipeline/preview/
+pipeline/work/
+pipeline/*.tar.gz
+pipeline/env.sh
+pipeline/run_state
+pipeline/gcp_watch_state
+pipeline/*.pid
+pipeline/.gcp_zone
+pipeline/.gcp_machine
+pipeline/.gcp_create_err
