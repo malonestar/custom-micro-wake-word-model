@@ -143,3 +143,48 @@ grep -q 'StartLimitBurst' "$STARTUP" \
 
 echo
 if [ "$FAIL" -eq 0 ]; then echo "gcp shutdown: $PASS passed"; else echo "gcp shutdown: $PASS passed, $FAIL FAILED"; exit 1; fi
+
+# --- a signal must NOT power the machine off --------------------------------
+# systemd sends SIGTERM on every stop/restart. Powering off in the handler makes
+# routine administration destructive.
+d="$(mk_env sigterm)"
+cat > "$d/repo/pipeline/bootstrap.sh" <<'S'
+#!/usr/bin/env bash
+touch env.sh; exit 0
+S
+cat > "$d/repo/pipeline/run.sh" <<'S'
+#!/usr/bin/env bash
+case "$*" in
+  *--only\ 02_datasets*) exit 0 ;;
+  *--preflight*)         exit 0 ;;
+esac
+sleep 120
+S
+chmod +x "$d/repo/pipeline"/*.sh
+SHUTDOWN_LOG="$d/shutdown.log" PATH="$d/bin:$PATH" \
+  WAKEWORD_REPO="$d/repo" WAKEWORD_WORK_DIR="$d/work" WAKEWORD_BUCKET="" \
+  WAKEWORD_AUTO_SHUTDOWN=1 "$d/repo/pipeline/gcp/vm_pipeline.sh" >/dev/null 2>&1 &
+vmpid=$!
+sleep 8
+# systemd signals the whole cgroup, not just the leader. Signalling only the
+# parent leaves bash blocked on its foreground child and the trap deferred, so
+# kill the children too to reproduce what systemd actually does.
+pkill -TERM -P "$vmpid" 2>/dev/null
+kill -TERM "$vmpid" 2>/dev/null
+sleep 6
+# Recording the interruption is best effort: bash frequently dies of SIGTERM
+# outright rather than running a trap that was queued behind a foreground
+# child, so the state file may still read "running". That is acceptable.
+# What must hold unconditionally is that nothing powered the machine off —
+# a `systemctl restart` must never terminate the VM.
+st="$(head -1 "$d/work/vm_state" 2>/dev/null)"
+case "$st" in
+  interrupted|running) PASS=$((PASS+1)); echo "  ok    SIGTERM: state is sane ($st)" ;;
+  *) FAIL=$((FAIL+1)); echo "  FAIL  SIGTERM: unexpected state $st" ;;
+esac
+check "SIGTERM: does NOT power off (the guarantee)" "no" "$([ -s "$d/shutdown.log" ] && echo yes || echo no)"
+kill "$vmpid" 2>/dev/null
+
+echo
+if [ "$FAIL" -eq 0 ]; then echo "gcp shutdown (with signal handling): $PASS passed"
+else echo "gcp shutdown: $PASS passed, $FAIL FAILED"; exit 1; fi

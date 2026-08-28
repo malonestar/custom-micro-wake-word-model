@@ -64,7 +64,14 @@ power_off() {
   ( sleep "${WAKEWORD_SHUTDOWN_DELAY:-20}"; sudo shutdown -h now ) &
 }
 
-trap 'state "interrupted" "received a signal"; power_off "interrupted"' INT TERM
+# Record the interruption but do NOT power off. systemd sends SIGTERM on every
+# `systemctl stop|restart`, so powering off here means routine administration
+# kills the machine — which is exactly what happened the first time: a restart
+# to reload the unit file terminated the VM 22 seconds into the real run.
+# An operator stopping the service is usually about to look at something, so
+# leave the machine up; the watcher's wall-clock ceiling is the backstop
+# against it idling forever.
+trap 'state "interrupted" "received a signal (service stopped or restarted)"; exit 143' INT TERM
 
 say "wake word VM pipeline starting"
 say "repo=$REPO config=$CONFIG work=$WORK bucket=${BUCKET:-none}"
