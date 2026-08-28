@@ -291,6 +291,92 @@ already durable. Leave the flag off.
 
 ---
 
+## Running it on a GCP VM — the path that actually finished
+
+Colab preempted three actively-computing sessions and then ran out of free-tier
+T4 capacity entirely. A VM cannot be reclaimed, so this is where the model
+finally got built. A full run is roughly 5 hours and about $8.
+
+```bash
+export GCLOUD_BIN="$HOME/google-cloud-sdk/bin/gcloud"
+export WAKEWORD_BUCKET="gs://<your-project>-wakeword"
+
+./gcp/gcp_run.sh create     # provisions, installs, preflights, runs
+./gcp/gcp_run.sh watch      # exits when finished — the exit IS the event
+./gcp/gcp_run.sh fetch      # downloads the .tflite + manifest
+```
+
+### The VM shuts itself down
+
+Nobody should have to remember to stop a GPU VM; an idle one burns roughly
+$27/day. `vm_pipeline.sh` powers the machine off on every terminal outcome —
+success, a failed preflight, a failure that repeated past the retry cap —
+after publishing logs, checkpoints and artifacts to the bucket so results
+outlive the disk. Transient crashes are left to systemd and do **not** trigger
+shutdown, so a blip cannot throw away a run that would have finished.
+
+`tests/test_gcp_shutdown.sh` covers that contract against a stubbed shutdown.
+It has already caught three bugs that would each have cost real money:
+
+- `local` outside a function left a variable unset, and under `set -u` that
+  killed the script on its first retry instead of retrying then shutting down
+- `rc=$?` after an `if` block reads the *if*'s status, so a failing run looked
+  successful
+- the shutdown was a backgrounded `( sleep N; shutdown -h now ) &`, which lives
+  in the service cgroup and is killed the instant the main process exits — the
+  machine logged "SHUTTING DOWN" and then stayed up billing
+
+### When a zone has no GPU
+
+GPU capacity is per-zone and moves around; quota usually exists for T4, L4,
+V100 and P100 across every US region while *capacity* for any one of them does
+not. `gcp/migrate.sh` restores a snapshot into whichever machine/GPU/zone will
+accept it, so a stranded disk is a ten-minute problem rather than a rebuild.
+
+```bash
+gcloud compute disks snapshot wakeword-trainer --zone <zone> --snapshot-names wakeword-snap
+gcloud compute instances delete wakeword-trainer --zone <zone> --quiet
+./gcp/migrate.sh
+```
+
+---
+
+## What v1 actually produced
+
+Trained 2026-08-28 on an L4: 50,000 positives, 23,000 confusables, all three
+negative feature sets, the full 9.7 h ambient eval, 45,000 steps in 4 h 06 m.
+
+The deployable streaming model's measured tradeoff — `probability_cutoff` picks
+your point on this curve, and it is a **manifest edit, not a retrain**:
+
+| cutoff | recall | false accepts/hour |
+|---|---|---|
+| 0.99 | 54% | 0.00 |
+| 0.98 | 61% | 0.38 |
+| 0.92 | 77% | 0.56 |
+| 0.80 | 87% | 0.75 |
+| 0.70 | 90% | 1.50 |
+
+Those rates are measured against continuous multi-speaker conversation, so a
+normal room should be quieter than the table suggests.
+
+### Where the time actually went
+
+| Step | Duration | Bound by |
+|---|---|---|
+| 1 — 73,000 TTS clips | **2 m 36 s** | GPU |
+| 2 — datasets | ~1 h | network |
+| 3 — features (86 GB) | **58 m** | CPU — GPU idle |
+| 4 — training (45k steps) | **4 h 06 m** | a single CPU thread; GPU ~10% |
+
+Worth internalising before renting hardware: the GPU earns its keep during
+step 1 and is largely idle afterwards, while **RAM** is the binding constraint.
+Peak was 26.8 GB, of which only ~6 GB was non-reclaimable — the rest is page
+cache for memory-mapped features, which the kernel will evict under pressure.
+32 GB is the practical floor for the full config; 48-64 GB is comfortable.
+
+---
+
 ## What the steps do, and how long they take
 
 Times are for a single NVIDIA T4.
@@ -416,6 +502,11 @@ pipeline/
   run.sh                   start the pipeline (--preview / --detach / --service)
   status.sh                progress summary
   colab/colab_run.sh       drive the whole thing on a Colab runtime
+  colab/watch.sh           blocks until a run needs attention; its exit is the event
+  gcp/gcp_run.sh           create/watch/fetch a GCP training VM
+  gcp/vm_pipeline.sh       runs on the VM; owns the self-shutdown contract
+  gcp/startup.sh           GCE startup script, idempotent across reboots
+  gcp/migrate.sh           re-place the VM wherever there is GPU capacity
   wakeword/
     config.py              config parsing and the work-directory layout
     state.py               step markers and status.json — the resume machinery
